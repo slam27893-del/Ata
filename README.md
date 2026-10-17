@@ -1,10 +1,16 @@
-# 🛡️ AOT: Revolution - Delta Hub v2.1 [Utgard Refill + AutoSave + Protected]
+# 🛡️ Delta Multi-Game Hub v3.0 [Attack on Titan: Revolution + Pixel Blade]
 
-سكربت متكامل مع **دعم التعبئة التلقائية في خريطة أوتغارد (Utgard) وجميع الخرائط** + **حفظ تلقائي للإعدادات وتشغيل تلقائي بين الغارات** + **نظام حماية متعدد الطبقات (Multi-Layer Anti-Ban & Stealth Protection)** لماب **Attack on Titan: Revolution (AOT:R)** في روبلوكس، مصمم خصيصاً لمشغل **Delta Executor** (أندرويد، iOS، والكمبيوتر).
+سكربت شامل ومتعدد الألعاب (**Multi-Game Hub**) يعمل بنفس الرابط الواحد تلقائياً على كلٍ من:
+1. ⚔️ **Attack on Titan: Revolution (AOT:R)** (جميع الخرائط بما فيها أوتغارد Utgard + الغارات Raids + لفات العائلات).
+2. 🗡️ **Pixel Blade** (فارم الدنجن والغرف تلقائياً + فارم الغارات + Kill Aura + تقوية الضرر الخارق والشفاء + فتح الصناديق والأمنيات + دخول البوابات تلقائياً).
+
+مزود **بحفظ تلقائي للإعدادات وتشغيل تلقائي بين الغارات والدنجن (`Auto-Save & Queue On Teleport`)** + **نظام حماية متعدد الطبقات (`Multi-Layer Anti-Ban & Stealth Protection`)** لمشغل **Delta Executor** (أندرويد، iOS، والكمبيوتر).
 
 ---
 
-## 🚀 طريقة التشغيل في دلتا (Delta Executor)
+## 🚀 رابط التشغيل الموحد في دلتا (Delta Executor)
+
+نفس السطر يشتغل تلقائياً في اللعبتين (يتعرف على الماب الذي دخلته ويفتح تبويباته تلقائياً):
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/slam27893-del/Ata/main/script.lua"))()
@@ -12,19 +18,28 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/slam27893-del/Ata/mai
 
 ---
 
-## 🔥 التحديثات والإصلاحات الجديدة (v2.1)
+## 🗡️ مميزات ماب Pixel Blade (جديد في v3.0)
 
-1. **🏰 إصلاح التعبئة التلقائية في خريطة أوتغارد (`Utgard` وجميع الخرائط الأخرى):**
-   - في خريطة **أوتغارد (Utgard)** (وبعض الخرائط مثل Docks و Stohess)، لا تكون نقاط التعبئة (`Refill`) داخل `workspace.Unclimbable.Reloads` كالمعتاد، بل تكون موزعة داخل مجسمات القلعة/الخريطة في `workspace`.
-   - يقوم السكربت الآن بمسح ذكي لكامل `workspace` للعثور على أقرب نقطة `Refill` حقيقية للاعب في أي خريطة كانت.
-   - كما يقوم بقراءة عدد أطقم السيوف (`Sets`) بدقة عبر `ContentText` وتجريد وسوم `RichText`، بالإضافة إلى مراقبة انكسار السيف الفعلي في اليد (`Blade_1.Transparency == 1`): فعند نفاد السيوف الاحتياطية، يقوم السكربت بإيقاف الفارم مؤقتاً لثانية واحدة، والانتقال إلى نقطة التعبئة، وتفعيل `fireproximityprompt` + `POST/GET Reload` + `Gas_Supply`، ثم سحب سيوف جديدة في اليد واستئناف القتل فوراً!
+1. **⚔️ قسم الفارم والقتال (`🗡️ Pixel Blade قتال`):**
+   - **Auto Farm Dungeon:** الانتقال التلقائي لأقرب وحش حي، تخطي الغرف (`7`, `8`, `9` حسب الصعوبة `Normal` / `Heroic` / `Nightmare`)، والتعامل الخاص مع الزعماء (`Atticus`, `Maneater`, `Nekros`, `DarkNekros`) مع تفعيل `Noclip` وتثبيت السرعة.
+   - **Auto Farm Raids:** فارم الغارات التلقائي وقتل زعماء الرايد.
+   - **Kill Aura + Tornado:** ضرب جميع الأعداء المحيطين بك تلقائياً (`onHit` + `useAbility: tornado` + `abilityHit`).
+   - **God Buff & Auto Heal:** تفعيل تقوية الضرر والسرعة (`tempbuff`) والشفاء التلقائي المستمر (`heal`).
+   - **Auto Breakables:** تكسير الصناديق والأغراض القابلة للكسر في الماب تلقائياً.
+   - **Expand Enemy Hitbox:** تكبير هيت بوكس الأعداء مع التحكم بالحجم.
 
-2. **💾 التشغيل التلقائي وحفظ الإعدادات في الغارة التالية (`Auto-Save & Queue On Teleport`):**
-   - يحفظ السكربت جميع تفعيلاتك وإعداداتك تلقائياً في ملف `AOTR_Delta_Config_v2.json`.
-   - عند انتهاء الغارة/المهمة والانتقال لغارة ثانية، يعيد السكربت تشغيل نفسه تلقائياً عبر `queue_on_teleport` مع استرجاع وتفعيل جميع الإعدادات السابقة.
+2. **🎁 قسم الترقيات والصناديق والبوابات (`🎁 Pixel صناديق وبوابات`):**
+   - **Auto Pick Upgrade & Hide Popup:** اختيار بطاقات الترقية تلقائياً أثناء الدنجن وإخفاء نافذة الترقية المزعجة.
+   - **Auto Open All Chests:** فتح جميع الصناديق الموجودة في الحقيبة (`Loot`) تلقائياً.
+   - **Auto Open Wishes:** فتح الأمنيات (`Wishes`) تلقائياً.
+   - **Auto Claim Daily Quests & Achievements:** استلام جوائز المهام اليومية والإنجازات تلقائياً.
+   - **Auto Join Dungeon Portal:** اختيار البوابة (`Grasslands` / `AncientSands`) والصعوبة (`Normal` / `Heroic` / `Nightmare`) والدخول التلقائي المستمر مع حفظ الإعدادات وتشغيل السكربت تلقائياً داخل الدنجن!
 
-3. **🎲 لفات العائلات (`Auto Family Roll` عبر الريموت المباشر + الزر):**
-   - يدعم استدعاء ريموت اللف المباشر (`Remotes.GET:InvokeServer("Family", "Roll")`) بالإضافة إلى ضغط زر `Buttons_2.Roll` مع التوقف التلقائي عند الحصول على عائلة نادرة (`YEAGER` / `ACKERMAN` / `REISS` / `FRITZ` / `HELOS`).
+---
 
-4. **⏱️ حارس الـ 20 ثانية لإنهاء المهمة (`Safe Mission Timer Guard`):**
-   - يقتل جميع العمالقة فوراً، وعند الوصول إلى **آخر عملاق متبقٍ فقط** ينتظر حتى تكتمل الـ 20 ثانية منذ بداية المهمة ثم يقتله فوراً وينهي المهمة بنجاح.
+## ⚔️ مميزات ماب Attack on Titan: Revolution (AOT:R)
+
+- **Auto Kill Titans (Blades) & Auto Thunder Spears:** مع أولوية الزعماء وحارس الـ 20 ثانية الآمن لإنهاء المهمة.
+- **Auto Refill (Utgard + All Maps) & Auto Reload Blades:** دعم كامل لجميع الخرائط بما فيها قلعة أوتغارد (`Utgard`).
+- **Auto Family Roll:** عبر الريموت المباشر والواجهة مع التوقف التلقائي عند العائلات النادرة (`Yeager / Ackerman / Reiss / Fritz / Helos`).
+- **Auto Retry, Auto Skip Cutscene, Auto Raid Chests, Auto Escape Grab.**

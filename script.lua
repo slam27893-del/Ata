@@ -1,6 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Attack on Titan: Revolution (AOT:R) - Delta Hub [PROTECTED v2.1]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v3.0 - Auto-Detect & Auto-Save]
+    Supported Games:
+      1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
+      2. Pixel Blade (Dungeons, Raids, Kill Aura, Auto Upgrade, Chests & Portals)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -86,7 +89,44 @@ end
 
 local charAddedConn = LocalPlayer.CharacterAdded:Connect(updateCharacterRefs)
 
---// Remotes Discovery (Safe & Non-blocking + Auto-Reconnect)
+--//===========================================================================
+--// 🎮 AUTOMATIC GAME DETECTOR (AOT:R vs PIXEL BLADE)
+--//===========================================================================
+
+local PIXEL_BLADE_PLACE_IDS = {
+    [18172550962] = true
+}
+
+local AOTR_PLACE_IDS = {
+    MainMenu = 13379208636,
+    Lobby = 14916516914
+}
+
+local function detectCurrentGame()
+    if PIXEL_BLADE_PLACE_IDS[game.PlaceId] then
+        return "PixelBlade"
+    end
+    if ReplicatedStorage:FindFirstChild("remotes") and (
+        ReplicatedStorage.remotes:FindFirstChild("onHit")
+        or ReplicatedStorage.remotes:FindFirstChild("abilityHit")
+        or ReplicatedStorage.remotes:FindFirstChild("plrUpgrade")
+        or ReplicatedStorage.remotes:FindFirstChild("playerTP")
+    ) then
+        return "PixelBlade"
+    end
+    if LocalPlayer:FindFirstChild("plrStats") or PlayerGui:FindFirstChild("gameUI") then
+        return "PixelBlade"
+    end
+    return "AOTR"
+end
+
+local CurrentGame = detectCurrentGame()
+task.spawn(function()
+    task.wait(2)
+    CurrentGame = detectCurrentGame()
+end)
+
+--// Remotes Discovery (AOT:R)
 local Remotes = {
     GET = nil,
     POST = nil
@@ -95,13 +135,13 @@ local Remotes = {
 local function refreshRemotes()
     if Remotes.GET and Remotes.POST then return true end
     local ok, assets = pcall(function()
-        return ReplicatedStorage:FindFirstChild("Assets") or ReplicatedStorage:WaitForChild("Assets", 10)
+        return ReplicatedStorage:FindFirstChild("Assets")
     end)
     if ok and assets then
-        local remFolder = assets:FindFirstChild("Remotes") or assets:WaitForChild("Remotes", 10)
+        local remFolder = assets:FindFirstChild("Remotes")
         if remFolder then
-            Remotes.GET = remFolder:FindFirstChild("GET") or remFolder:WaitForChild("GET", 5)
-            Remotes.POST = remFolder:FindFirstChild("POST") or remFolder:WaitForChild("POST", 5)
+            Remotes.GET = remFolder:FindFirstChild("GET")
+            Remotes.POST = remFolder:FindFirstChild("POST")
         end
     end
     return (Remotes.GET ~= nil and Remotes.POST ~= nil)
@@ -109,53 +149,44 @@ end
 
 task.spawn(refreshRemotes)
 
---// Place IDs for AOT:R
-local PLACE_IDS = {
-    MainMenu = 13379208636,
-    Lobby = 14916516914
-}
+--// Remotes Discovery (Pixel Blade)
+local function getPBRemotes()
+    return ReplicatedStorage:FindFirstChild("remotes")
+end
 
 --//===========================================================================
---// 💾 AUTO-SAVE CONFIG & AUTO-EXECUTE ON NEXT RAID (TELEPORT PERSISTENCE)
+--// 💾 AUTO-SAVE CONFIG & AUTO-EXECUTE ON NEXT RAID/DUNGEON
 --//===========================================================================
 
 local Config = {
-    -- Auto Execute on Next Raid / Teleport
+    -- Global & Security Settings
     AutoExecuteOnTeleport = true,
-
-    -- 🛡️ Security & Anti-Ban Settings
     AntiKick = true,
     AntiAFK = true,
     SafeMissionTimerGuard = true,
-    MinSafeMissionSeconds = 20, -- Waits until 20s elapsed before killing the LAST titan
+    MinSafeMissionSeconds = 20,
     HumanizeAttacks = true,
     SpoofNapeProperties = true,
     AntiStaffProtection = true,
     AntiStrangerInSolo = false,
     VelocityAntiFling = true,
 
-    -- Auto Kill (Blades)
+    -- [Game 1] Attack on Titan: Revolution Settings
     AutoKillBlades = false,
-    MoveMode = "Teleportation", -- "Teleportation" | "Gliding"
+    MoveMode = "Teleportation",
     StartDelay = 3,
     FloatHeight = 200,
     GlideSpeed = 280,
     SlashCooldown = 0.25,
     KillNotifications = true,
-
-    -- Auto Thunder Spears
     AutoFarmTS = false,
-    TSKillMode = "Safe", -- "Safe" | "Risk"
+    TSKillMode = "Safe",
     TSHoverHeight = 60,
     TSStartDelay = 3,
-
-    -- Nape Hitbox & Skills
     ExpandNapes = false,
     NapeSize = 200,
     NapeTransparency = 0.75,
     TitanRipper = false,
-
-    -- Combat & Mission Helpers
     AutoReloadBlades = false,
     AutoRefill = false,
     AutoEscapeGrab = false,
@@ -163,19 +194,32 @@ local Config = {
     AutoSkipCutscene = false,
     AutoFreeChest = false,
     AutoPremiumChest = false,
-
-    -- Visuals & Performance
     TitanESP = false,
     RefillESP = false,
     RemoveDamageText = false,
-
-    -- Main Menu Family Roll & Webhook
     AutoRollFamily = false,
-    StopOnRareFamily = true, -- Stops on Yeager / Ackerman / Reiss / Fritz / Helos
+    StopOnRareFamily = true,
     RollInterval = 0.5,
-    WebhookURL = "",
-    WebhookEnabled = false,
-    WebhookShowUsername = false
+
+    -- [Game 2] Pixel Blade Settings
+    PB_AutoFarmDungeon = false,
+    PB_AutoFarmRaid = false,
+    PB_KillAura = false,
+    PB_KillAuraRange = 35,
+    PB_GodBuffAndHeal = false,
+    PB_AutoBreakables = false,
+    PB_ExpandHitbox = false,
+    PB_HitboxSize = 25,
+    PB_AutoUpgrade = false,
+    PB_HideUpgradePopup = true,
+    PB_AutoOpenChests = false,
+    PB_AutoOpenWishes = false,
+    PB_AutoClaimQuests = false,
+    PB_AutoClaimAchievements = false,
+    PB_SelectedDungeon = "Grasslands",
+    PB_SelectedDifficulty = "Normal",
+    PB_AutoJoinPortal = false,
+    PB_EnemyESP = false
 }
 
 local function saveConfig()
@@ -265,15 +309,14 @@ local State = {
     LastReloadFire = 0,
     NotifiedNapes = {},
     ActiveNotifs = {},
-    LastMissionTime = nil,
     TSHoverPos = nil,
     IsTSHovering = false,
     OriginalNapeSizes = {},
     Connections = {},
-    ESPObjects = {}
+    ESPObjects = {},
+    PB_EnteredBossRoom = false
 }
 
---// Helper: Safe Parent for GUI on Delta / Mobile / PC
 local function getSafeGuiParent()
     local ok, hui = pcall(function()
         if gethui then
@@ -295,7 +338,7 @@ StealthESPFolder.Name = randomIdentifier(16)
 StealthESPFolder.Parent = getSafeGuiParent()
 
 --//===========================================================================
---// 🛡️ LAYER 2: METAMETHOD HOOKS (ANTI-KICK & NAPE PROPERTY SPOOFER)
+--// 🛡️ LAYER 2: METAMETHOD HOOKS (ANTI-KICK & HITBOX PROPERTY SPOOFER)
 --//===========================================================================
 
 pcall(function()
@@ -306,7 +349,7 @@ pcall(function()
             if not checkcaller() and Config.AntiKick then
                 if self == LocalPlayer and (method == "Kick" or method == "kick") then
                     State.BlockedKicksCount = State.BlockedKicksCount + 1
-                    warn("[🛡️ AOT:R Security] Blocked a client Kick attempt!")
+                    warn("[🛡️ Security] Blocked a client Kick attempt!")
                     return nil
                 end
             end
@@ -392,20 +435,19 @@ local function checkPlayerSecurity(plr)
         if isSuspiciousStaff then
             Config.AutoKillBlades = false
             Config.AutoFarmTS = false
-            warn("[🛡️ AOT:R Security] Staff/Moderator detected (" .. plr.Name .. ")! Evading to Lobby...")
-            pcall(function()
-                TeleportService:Teleport(PLACE_IDS.Lobby, LocalPlayer)
-            end)
+            Config.PB_AutoFarmDungeon = false
+            Config.PB_AutoFarmRaid = false
+            Config.PB_KillAura = false
+            warn("[🛡️ Security] Staff/Moderator detected (" .. plr.Name .. ")! Pausing all farm features.")
             return
         end
     end
 
-    if Config.AntiStrangerInSolo and game.PlaceId ~= PLACE_IDS.MainMenu and game.PlaceId ~= PLACE_IDS.Lobby then
-        if Config.AutoKillBlades or Config.AutoFarmTS then
-            Config.AutoKillBlades = false
-            Config.AutoFarmTS = false
-            warn("[🛡️ AOT:R Security] Stranger (" .. plr.Name .. ") joined! Pausing Auto-Farm.")
-        end
+    if Config.AntiStrangerInSolo then
+        Config.AutoKillBlades = false
+        Config.AutoFarmTS = false
+        Config.PB_AutoFarmDungeon = false
+        Config.PB_AutoFarmRaid = false
     end
 end
 
@@ -413,58 +455,6 @@ for _, plr in ipairs(Players:GetPlayers()) do
     task.spawn(checkPlayerSecurity, plr)
 end
 table.insert(State.Connections, Players.PlayerAdded:Connect(checkPlayerSecurity))
-
---//===========================================================================
---// 🛡️ LAYER 4: ACCURATE MISSION TIMER GUARD (FINISHES RIGHT AFTER 20s)
---//===========================================================================
-
-local function countAliveTitans()
-    local titansFolder = workspace:FindFirstChild("Titans")
-    if not titansFolder then return 0 end
-    local alive = 0
-    for _, t in ipairs(titansFolder:GetChildren()) do
-        local hum = t:FindFirstChildWhichIsA("Humanoid")
-        if hum and hum.Health > 0 then
-            alive = alive + 1
-        end
-    end
-    return alive
-end
-
-local function getMissionElapsedSeconds()
-    return tick() - State.MissionStartTimestamp
-end
-
-local function isSafeToKillTitan()
-    if not Config.SafeMissionTimerGuard then
-        return true
-    end
-    local aliveCount = countAliveTitans()
-    local elapsed = getMissionElapsedSeconds()
-
-    if aliveCount <= 1 and elapsed < Config.MinSafeMissionSeconds then
-        return false
-    end
-    return true
-end
-
-task.spawn(function()
-    while State.Running do
-        task.wait(0.5)
-        local alive = countAliveTitans()
-        if alive > 0 and not State.MissionHasTitans then
-            State.MissionHasTitans = true
-            State.MissionStartTimestamp = tick()
-            State.NotifiedNapes = {}
-        elseif alive == 0 and State.MissionHasTitans then
-            local interface = PlayerGui:FindFirstChild("Interface")
-            local rewards = interface and interface:FindFirstChild("Rewards")
-            if rewards and rewards.Visible then
-                State.MissionHasTitans = false
-            end
-        end
-    end
-end)
 
 --//===========================================================================
 --// UI & MULTI-METHOD BUTTON CLICKER
@@ -530,15 +520,13 @@ local function smartClickButton(btn, offsetX, offsetY)
     local clicked = false
 
     pcall(function()
-        if firesignal then
-            if btn:IsA("GuiButton") then
-                pcall(firesignal, btn.Activated)
-                pcall(firesignal, btn.MouseButton1Click)
-                pcall(firesignal, btn.MouseButton1Down)
-                task.wait(0.02)
-                pcall(firesignal, btn.MouseButton1Up)
-                clicked = true
-            end
+        if firesignal and btn:IsA("GuiButton") then
+            pcall(firesignal, btn.Activated)
+            pcall(firesignal, btn.MouseButton1Click)
+            pcall(firesignal, btn.MouseButton1Down)
+            task.wait(0.02)
+            pcall(firesignal, btn.MouseButton1Up)
+            clicked = true
         end
     end)
 
@@ -582,8 +570,53 @@ local function smartClickButton(btn, offsetX, offsetY)
 end
 
 --//===========================================================================
---// GAMEPLAY LOGIC FUNCTIONS (AOT:R)
+--// ⚔️ GAME 1 MODULE: ATTACK ON TITAN: REVOLUTION (AOT:R)
 --//===========================================================================
+
+local PRIORITY_TITANS = { "Attack_Titan", "Female_Titan", "Armored_Titan" }
+
+local function countAliveTitans()
+    local titansFolder = workspace:FindFirstChild("Titans")
+    if not titansFolder then return 0 end
+    local alive = 0
+    for _, t in ipairs(titansFolder:GetChildren()) do
+        local hum = t:FindFirstChildWhichIsA("Humanoid")
+        if hum and hum.Health > 0 then
+            alive = alive + 1
+        end
+    end
+    return alive
+end
+
+local function isSafeToKillTitan()
+    if not Config.SafeMissionTimerGuard then
+        return true
+    end
+    local aliveCount = countAliveTitans()
+    local elapsed = tick() - State.MissionStartTimestamp
+    if aliveCount <= 1 and elapsed < Config.MinSafeMissionSeconds then
+        return false
+    end
+    return true
+end
+
+task.spawn(function()
+    while State.Running do
+        task.wait(0.5)
+        local alive = countAliveTitans()
+        if alive > 0 and not State.MissionHasTitans then
+            State.MissionHasTitans = true
+            State.MissionStartTimestamp = tick()
+            State.NotifiedNapes = {}
+        elseif alive == 0 and State.MissionHasTitans then
+            local interface = PlayerGui:FindFirstChild("Interface")
+            local rewards = interface and interface:FindFirstChild("Rewards")
+            if rewards and rewards.Visible then
+                State.MissionHasTitans = false
+            end
+        end
+    end
+end)
 
 local function showKillNotification(killCount)
     if not Config.KillNotifications then return end
@@ -649,8 +682,6 @@ local function showKillNotification(killCount)
         end
     end)
 end
-
-local PRIORITY_TITANS = { "Attack_Titan", "Female_Titan", "Armored_Titan" }
 
 local function getTitanNape(titan)
     if not titan then return nil end
@@ -741,7 +772,6 @@ local function getMultipleNapes(limit)
     return out
 end
 
--- Safe Nape Hitbox Resizer
 local function applyNapeResize(part)
     if not part or not part:IsA("BasePart") or part.Name ~= "Nape" then return end
     if not State.OriginalNapeSizes[part] then
@@ -776,17 +806,12 @@ local function updateAllNapes()
     end
 end
 
---//===========================================================================
---// 🔧 UTGARD + ALL-MAPS REFILL & BLADE RELOAD SYSTEM (v2.1 FIX)
---//===========================================================================
-
--- Scans entire Workspace for all BaseParts named "Refill" (Critical for Utgard map!)
+-- Utgard + All-Maps Refill Finder
 local function getAllWorkspaceRefills()
     if not State.CachedRefillParts or (#State.CachedRefillParts == 0 and (os.clock() - State.LastRefillScan) > 8) then
         State.LastRefillScan = os.clock()
         State.CachedRefillParts = {}
 
-        -- 1. Check Unclimbable.Reloads first
         local unclimbable = workspace:FindFirstChild("Unclimbable")
         local reloads = unclimbable and unclimbable:FindFirstChild("Reloads")
         if reloads then
@@ -797,7 +822,6 @@ local function getAllWorkspaceRefills()
             end
         end
 
-        -- 2. Full Workspace scan (Finds Refill barrels/stations in Utgard, Docks, Stohess, etc.)
         for _, desc in ipairs(workspace:GetDescendants()) do
             if desc.Name == "Refill" and desc:IsA("BasePart") then
                 if not table.find(State.CachedRefillParts, desc) then
@@ -813,7 +837,6 @@ workspace:GetAttributeChangedSignal("Type"):Connect(function()
     State.CachedRefillParts = nil
 end)
 
--- Returns the closest Refill BasePart to the player in any map (including Utgard)
 local function findClosestRefillPart()
     local rootPos = HumanoidRootPart and HumanoidRootPart.Position
     local closest = nil
@@ -835,7 +858,6 @@ local function findClosestRefillPart()
     return closest
 end
 
--- Gets the player's active Blade_1 part in hand
 local function getActiveHandBlade()
     local char = LocalPlayer.Character
     if not char then return nil end
@@ -857,7 +879,6 @@ local function areHandBladesBroken()
     return false
 end
 
--- Parses Sets text reliably even when RichText (<font>) tags are present
 local function parseRichTextNumber(label)
     if not label then return nil end
     local ok, text = pcall(function() return label.ContentText end)
@@ -885,7 +906,6 @@ local function getWeaponStatus()
     local top = main and main:FindFirstChild("Top")
 
     if top then
-        -- Find Blade/Blades frame (Even if nested inside a sub-child of Top)
         local bladeFrame = top:FindFirstChild("Blades") or top:FindFirstChild("Blade")
         if not bladeFrame then
             for _, child in ipairs(top:GetChildren()) do
@@ -940,7 +960,6 @@ local function getWeaponStatus()
     }
 end
 
--- Full Teleport-to-Station Refill Sequence (Works in Utgard & All Maps!)
 local function executeFullStationRefill()
     if State.IsRefilling then return end
     refreshRemotes()
@@ -963,7 +982,6 @@ local function executeFullStationRefill()
 
     task.wait(0.25)
 
-    -- 1. Fire ProximityPrompt on the Refill part/model (Used in Utgard & station prompts)
     pcall(function()
         if fireproximityprompt then
             local prompt = refillPart:FindFirstChildOfClass("ProximityPrompt")
@@ -975,7 +993,6 @@ local function executeFullStationRefill()
         end
     end)
 
-    -- 2. Fire both POST and GET Reload remotes + Gas Supply remote + R key
     for _ = 1, 3 do
         pcall(function()
             if HumanoidRootPart and refillPart then
@@ -1001,7 +1018,6 @@ local function executeFullStationRefill()
         task.wait(0.35)
     end
 
-    -- Wait briefly for station refill channel to complete, then draw fresh blades
     task.wait(1.2)
 
     if Remotes.GET then
@@ -1019,10 +1035,6 @@ local function executeFullStationRefill()
     State.FailedBladeReloadCount = 0
     State.IsRefilling = false
 end
-
---//===========================================================================
---// FAMILY ROLL FINDER, REMOTE & CLICKER (MAIN MENU)
---//===========================================================================
 
 local function findFamilyRollButton()
     local interface = PlayerGui:FindFirstChild("Interface")
@@ -1080,17 +1092,148 @@ local function isRareFamily(familyText)
 end
 
 --//===========================================================================
---// MAIN LOOPS (AUTO KILL BLADES, THUNDER SPEARS, REFILL, MISSIONS, ROLL)
+--// 🗡️ GAME 2 MODULE: PIXEL BLADE FUNCTIONS (DUNGEONS, RAIDS, AURA, LOOT)
 --//===========================================================================
 
--- 1. Heartbeat Loop (Auto Kill Blades + Hover + Anti-Fling)
+local PB_IGNORE_MOBS = { "ShroomKnight", "blender" }
+
+local function isPBMobAlive(mob)
+    if not mob or table.find(PB_IGNORE_MOBS, mob.Name) then return false end
+    local worldType = workspace:FindFirstChild("worldType")
+    local isAncientSands = worldType and worldType.Value == "AncientSands"
+    if isAncientSands and mob:FindFirstChild("worm") and mob.worm:FindFirstChild("Health") then
+        return mob.worm.Health.Value > 0
+    end
+    local hum = mob:FindFirstChildOfClass("Humanoid")
+    if hum and hum.Health > 0 then
+        return true
+    end
+    local hpVal = mob:FindFirstChild("Health")
+    if hpVal and hpVal:IsA("NumberValue") and hpVal.Value > 0 then
+        return true
+    end
+    return false
+end
+
+local function findClosestPBMob(isRaid)
+    if not Character or not HumanoidRootPart then return nil end
+    local myPos = HumanoidRootPart.Position
+    local closestMob = nil
+    local minDist = math.huge
+
+    for _, v in ipairs(workspace:GetChildren()) do
+        if v ~= Character and v:IsA("Model") and not table.find(PB_IGNORE_MOBS, v.Name) then
+            local hasEntrance = (v:GetAttribute("hadEntrance") ~= nil) or isRaid
+            if hasEntrance and isPBMobAlive(v) then
+                local ok, pivot = pcall(function() return v:GetPivot() end)
+                if ok and pivot then
+                    local d = (pivot.Position - myPos).Magnitude
+                    if d < minDist then
+                        minDist = d
+                        closestMob = v
+                    end
+                end
+            end
+        end
+    end
+
+    return closestMob
+end
+
+local function applyPBTempBuffAndHeal()
+    local pbRemotes = getPBRemotes()
+    local abilityEvent = pbRemotes and pbRemotes:FindFirstChild("abilityEvent")
+    if not abilityEvent or not Character then return end
+
+    pcall(function()
+        abilityEvent:FireServer({
+            char = Character,
+            name = "tempbuff",
+            statBoosts = {
+                Dmg = "550000000%",
+                BaseSpeed = "45%"
+            },
+            dur = 50000000
+        })
+        abilityEvent:FireServer({
+            char = Character,
+            name = "heal",
+            amount = 1
+        })
+    end)
+end
+
+local function pbKillAllNearby(maxRange, isRaid)
+    local pbRemotes = getPBRemotes()
+    if not pbRemotes or not HumanoidRootPart then return end
+
+    local onHit = pbRemotes:FindFirstChild("onHit")
+    local useAbility = pbRemotes:FindFirstChild("useAbility")
+    local abilityHit = pbRemotes:FindFirstChild("abilityHit")
+    local abilityEvent = pbRemotes:FindFirstChild("abilityEvent")
+    local myPos = HumanoidRootPart.Position
+
+    for _, v in ipairs(workspace:GetChildren()) do
+        if v ~= Character and v:IsA("Model") and not table.find(PB_IGNORE_MOBS, v.Name) then
+            -- Breakables check
+            if Config.PB_AutoBreakables and string.find(string.lower(v.Name), "breakable") then
+                local bHum = v:FindFirstChildOfClass("Humanoid")
+                if bHum and onHit then
+                    pcall(function()
+                        onHit:FireServer(bHum, -math.huge, {}, 0)
+                    end)
+                end
+            elseif isPBMobAlive(v) then
+                local ok, pivot = pcall(function() return v:GetPivot() end)
+                local dist = (ok and pivot) and (pivot.Position - myPos).Magnitude or math.huge
+                if dist <= (maxRange or 100) or isRaid then
+                    local hum = v:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        if onHit then
+                            pcall(function()
+                                onHit:FireServer(hum, -math.huge, {}, 0)
+                            end)
+                        end
+                        if useAbility and abilityHit then
+                            pcall(function()
+                                useAbility:FireServer("tornado")
+                                abilityHit:FireServer(hum, math.huge, { stun = { dur = 1 } })
+                            end)
+                        end
+                    end
+                    if v.Name == "Maneater" and useAbility then
+                        pcall(function()
+                            useAbility:FireServer("lunarSpell")
+                        end)
+                    elseif v.Name == "Atticus" and VirtualInputManager then
+                        pcall(function()
+                            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                        end)
+                    end
+                end
+            end
+        end
+    end
+
+    if Config.PB_GodBuffAndHeal and abilityEvent and Character then
+        pcall(function()
+            abilityEvent:FireServer({
+                char = Character,
+                name = "heal",
+                amount = 1
+            })
+        end)
+    end
+end
+
+--//===========================================================================
+--// MAIN LOOPS (AOT:R + PIXEL BLADE)
+--//===========================================================================
+
+-- 1. Heartbeat Loop (AOT:R Auto Kill + Pixel Blade Velocity Lock & Hitbox)
 table.insert(State.Connections, RunService.Heartbeat:Connect(function()
     if not State.Running or not HumanoidRootPart then return end
-
-    -- Pause movement overrides while teleported to Refill Station
-    if State.IsRefilling then
-        return
-    end
 
     if Config.VelocityAntiFling then
         if HumanoidRootPart.AssemblyLinearVelocity.Magnitude > 650 then
@@ -1101,14 +1244,32 @@ table.insert(State.Connections, RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- Thunder Spears Hover Lock
+    -- Pixel Blade Active Farm Velocity Lock & Noclip
+    if Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid then
+        HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+        HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
+        if Character then
+            for _, part in ipairs(Character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end
+    end
+
+    -- AOT:R Refill Pause
+    if State.IsRefilling then
+        return
+    end
+
+    -- AOT:R Thunder Spears Hover Lock
     if Config.AutoFarmTS and State.IsTSHovering and State.TSHoverPos then
         HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
         HumanoidRootPart.CFrame = CFrame.new(State.TSHoverPos)
         return
     end
 
-    -- Auto Kill Titans (Blades)
+    -- AOT:R Auto Kill Titans (Blades)
     if Config.AutoKillBlades then
         if (tick() - State.FarmStartTimestamp) < Config.StartDelay then
             return
@@ -1163,7 +1324,220 @@ table.insert(State.Connections, RunService.Heartbeat:Connect(function()
     end
 end))
 
--- 2. Thunder Spears Background Loop
+-- 2. Pixel Blade Auto Farm Loop (Dungeons, Raids, Kill Aura, Upgrades, Chests, Portals)
+task.spawn(function()
+    while State.Running do
+        task.wait(0.15)
+        local pbRemotes = getPBRemotes()
+        if pbRemotes then
+            -- God Buff & Auto Heal
+            if Config.PB_GodBuffAndHeal then
+                applyPBTempBuffAndHeal()
+            end
+
+            -- Kill Aura / Breakables
+            if Config.PB_KillAura or Config.PB_AutoBreakables then
+                pcall(pbKillAllNearby, Config.PB_KillAuraRange, false)
+            end
+
+            -- Expand Enemy Hitboxes
+            if Config.PB_ExpandHitbox then
+                pcall(function()
+                    local sz = Vector3.new(Config.PB_HitboxSize, Config.PB_HitboxSize, Config.PB_HitboxSize)
+                    for _, v in ipairs(workspace:GetChildren()) do
+                        if v ~= Character and v:IsA("Model") and isPBMobAlive(v) then
+                            local bh = v:FindFirstChild("basehitbox")
+                            if bh and bh:IsA("BasePart") then
+                                bh.Size = sz
+                                bh.CanCollide = false
+                            end
+                            local mHrp = v:FindFirstChild("HumanoidRootPart")
+                            if mHrp and mHrp:IsA("BasePart") then
+                                mHrp.Size = sz
+                                mHrp.CanCollide = false
+                            end
+                        end
+                    end
+                end)
+            end
+
+            -- Auto Farm Dungeon / Raid Movement & Combat
+            if (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) and HumanoidRootPart then
+                local isRaid = Config.PB_AutoFarmRaid
+                local cutscene = workspace:FindFirstChild("inCutscene")
+                local inCutscene = cutscene and cutscene.Value == true
+
+                -- Auto Room Progression in Dungeon
+                if Config.PB_AutoFarmDungeon then
+                    pcall(function()
+                        local diffObj = workspace:FindFirstChild("difficulty")
+                        local diffVal = diffObj and diffObj.Value
+                        local r6 = workspace:FindFirstChild("6")
+                        local r7 = workspace:FindFirstChild("7")
+                        local r8 = workspace:FindFirstChild("8")
+                        local r9 = workspace:FindFirstChild("9")
+                        if diffVal == "Normal" and r6 and r7 then
+                            HumanoidRootPart.CFrame = CFrame.new(r7:GetPivot().Position + Vector3.new(0, 5, 0))
+                        elseif diffVal == "Heroic" and r7 and r8 then
+                            HumanoidRootPart.CFrame = CFrame.new(r8:GetPivot().Position + Vector3.new(0, 5, 0))
+                        elseif diffVal == "Nightmare" and r8 and r9 then
+                            HumanoidRootPart.CFrame = CFrame.new(r9:GetPivot().Position + Vector3.new(0, 5, 0))
+                        end
+                    end)
+                end
+
+                if not inCutscene then
+                    local mob = findClosestPBMob(isRaid)
+                    if mob then
+                        pcall(function()
+                            if mob.Name == "Atticus" and not State.PB_EnteredBossRoom then
+                                local vault = workspace:FindFirstChild("Vault")
+                                if vault then
+                                    HumanoidRootPart.CFrame = CFrame.new(vault:GetPivot().Position)
+                                    State.PB_EnteredBossRoom = true
+                                    task.wait(0.5)
+                                end
+                            end
+
+                            local mobPos, mobLook
+                            if mob.Name == "Maneater" and mob:FindFirstChild("Root") then
+                                mobPos = Vector3.new(mob.Root.Position.X, 35, mob.Root.Position.Z)
+                                mobLook = mob.Root.CFrame.LookVector
+                            elseif mob:FindFirstChild("HumanoidRootPart") then
+                                mobPos = mob.HumanoidRootPart.Position
+                                mobLook = mob.HumanoidRootPart.CFrame.LookVector
+                                if not isRaid then
+                                    mob.HumanoidRootPart.Anchored = true
+                                end
+                            else
+                                local pv = mob:GetPivot()
+                                mobPos = pv.Position
+                                mobLook = pv.LookVector
+                            end
+
+                            local offsetMult = (mob.Name == "Nekros" or mob.Name == "DarkNekros") and 2 or -7
+                            local targetPos = mobPos + (mobLook * offsetMult)
+                            HumanoidRootPart.CFrame = CFrame.lookAt(targetPos, mobPos)
+
+                            applyPBTempBuffAndHeal()
+                            pbKillAllNearby(120, isRaid)
+                        end)
+                    end
+                end
+            end
+
+            -- Auto Pick Dungeon Upgrades
+            if Config.PB_AutoUpgrade then
+                pcall(function()
+                    local upgRemote = pbRemotes:FindFirstChild("plrUpgrade")
+                    if upgRemote then
+                        upgRemote:FireServer(math.random(1, 3))
+                    end
+                    if VirtualInputManager then
+                        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Two, false, game)
+                        task.wait(0.03)
+                        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Two, false, game)
+                    end
+                    if Config.PB_HideUpgradePopup then
+                        local dBlur = Lighting:FindFirstChild("deathBlur")
+                        if dBlur then dBlur.Size = 0 end
+                        local gameUI = PlayerGui:FindFirstChild("gameUI")
+                        local upgFrame = gameUI and gameUI:FindFirstChild("upgradeFrame")
+                        if upgFrame then
+                            upgFrame.Position = UDim2.new(0, 0, -1.2, 0)
+                        end
+                    end
+                end)
+            end
+        end
+    end
+end)
+
+-- 3. Pixel Blade Slow Automation Loop (Chests, Wishes, Quests, Portal Auto-Join)
+task.spawn(function()
+    while State.Running do
+        task.wait(1)
+        local pbRemotes = getPBRemotes()
+        if pbRemotes then
+            -- Auto Open All Chests in Inventory
+            if Config.PB_AutoOpenChests then
+                pcall(function()
+                    local openLoot = pbRemotes:FindFirstChild("openLoot")
+                    local gameUI = PlayerGui:FindFirstChild("gameUI")
+                    local lootFolder = gameUI
+                        and gameUI:FindFirstChild("armory")
+                        and gameUI.armory:FindFirstChild("inventory")
+                        and gameUI.armory.inventory:FindFirstChild("clip")
+                        and gameUI.armory.inventory.clip:FindFirstChild("Loot")
+                    if openLoot and lootFolder then
+                        for _, item in ipairs(lootFolder:GetChildren()) do
+                            if string.find(item.Name, "Chest") then
+                                openLoot:InvokeServer(item.Name)
+                                task.wait(0.1)
+                            end
+                        end
+                    end
+                end)
+            end
+
+            -- Auto Open Wishes
+            if Config.PB_AutoOpenWishes then
+                pcall(function()
+                    local openWish = pbRemotes:FindFirstChild("openWish")
+                    if openWish then
+                        openWish:InvokeServer()
+                    end
+                end)
+            end
+
+            -- Auto Claim Daily Quests & Achievements
+            if Config.PB_AutoClaimQuests then
+                pcall(function()
+                    local dq = pbRemotes:FindFirstChild("dailyQuestEvent")
+                    if dq then
+                        for i = 1, 3 do
+                            for j = 1, 3 do
+                                dq:FireServer("Claim", "Quest_" .. tostring(i), j)
+                            end
+                        end
+                    end
+                end)
+            end
+
+            if Config.PB_AutoClaimAchievements then
+                pcall(function()
+                    local dq = pbRemotes:FindFirstChild("dailyQuestEvent")
+                    local constants = ReplicatedStorage:FindFirstChild("constants")
+                    local qDataMod = constants and constants:FindFirstChild("questData")
+                    if dq and qDataMod then
+                        local qData = require(qDataMod)
+                        if qData and qData.Achievements then
+                            for _, ach in pairs(qData.Achievements) do
+                                if ach and ach.id then
+                                    dq:FireServer("Claim", ach.id, true)
+                                end
+                            end
+                        end
+                    end
+                end)
+            end
+
+            -- Auto Join Dungeon Portal
+            if Config.PB_AutoJoinPortal then
+                pcall(function()
+                    local playerTP = pbRemotes:FindFirstChild("playerTP")
+                    if playerTP then
+                        saveConfig()
+                        setupAutoExecuteOnTeleport()
+                        playerTP:FireServer(Config.PB_SelectedDungeon, Config.PB_SelectedDifficulty, true)
+                    end
+                end)
+            end
+        end
+    end
+end)
+
+-- 4. AOT:R Thunder Spears Background Loop
 task.spawn(function()
     local firstLaunch = true
     while State.Running do
@@ -1230,7 +1604,7 @@ task.spawn(function()
     end
 end)
 
--- 3. Combat Automation Loop (Utgard + All-Maps Auto Refill, Auto Reload Blades, Auto Escape, Titan Ripper)
+-- 5. AOT:R Combat Automation Loop (Utgard + All-Maps Auto Refill, Auto Reload Blades, Auto Escape, Titan Ripper)
 task.spawn(function()
     local skillCooldowns = {
         ["14"] = { last = 0, cd = 5 },
@@ -1257,7 +1631,6 @@ task.spawn(function()
         local status = getWeaponStatus()
         local now = tick()
 
-        -- Step A: Auto Reload Blades from Sheath when hand blades break
         if (Config.AutoReloadBlades or Config.AutoRefill) and status.bladeBarDepleted and not status.bladesEmpty and not State.IsRefilling then
             if (now - State.LastReloadFire) >= 0.45 then
                 State.LastReloadFire = now
@@ -1268,7 +1641,6 @@ task.spawn(function()
                 end
                 task.wait(0.25)
                 if areHandBladesBroken() then
-                    -- Even after invoking Blades Reload, blade is still broken -> sheaths are actually 0/3 on server!
                     State.FailedBladeReloadCount = State.FailedBladeReloadCount + 1
                 else
                     State.FailedBladeReloadCount = 0
@@ -1278,8 +1650,6 @@ task.spawn(function()
             State.FailedBladeReloadCount = 0
         end
 
-        -- Step B: Auto Refill at Refill Station (Utgard + All Maps)
-        -- Triggers if Sets == 0, Spears == 0, Gas is low, OR if Blades Reload failed >= 2 times (meaning sheaths are empty on server!)
         if Config.AutoRefill and not State.IsRefilling then
             local emptySheaths = status.bladesEmpty or (status.setsCount == 0) or (State.FailedBladeReloadCount >= 2)
             local needsStationRefill = emptySheaths or status.spearsEmpty or status.gasLow
@@ -1288,7 +1658,6 @@ task.spawn(function()
                 State.LastRefillFire = now
                 local refillPart = findClosestRefillPart()
                 if refillPart then
-                    -- First try remote-only quick refill
                     if Remotes.POST then
                         pcall(function()
                             Remotes.POST:FireServer("Attacks", "Reload", refillPart)
@@ -1303,7 +1672,6 @@ task.spawn(function()
                         end)
                     end
 
-                    -- If blades are completely broken in hand and sheaths are empty (e.g. Utgard), teleport to the Refill part & complete station refill!
                     if (emptySheaths and status.bladeBarDepleted) or State.FailedBladeReloadCount >= 2 then
                         executeFullStationRefill()
                     elseif status.bladeBarDepleted and Remotes.GET then
@@ -1317,7 +1685,6 @@ task.spawn(function()
             end
         end
 
-        -- Step C: Auto Escape Grab
         if Config.AutoEscapeGrab and Remotes.POST then
             local interface = PlayerGui:FindFirstChild("Interface")
             local buttons = interface and interface:FindFirstChild("Buttons")
@@ -1334,7 +1701,6 @@ task.spawn(function()
             end
         end
 
-        -- Step D: Titan Ripper Auto Skills
         if Config.TitanRipper and Remotes.GET and isSafeToKillTitan() and not State.IsRefilling then
             for skillId, info in pairs(skillCooldowns) do
                 if (now - info.last) >= info.cd then
@@ -1350,13 +1716,12 @@ task.spawn(function()
     end
 end)
 
--- 4. Mission & Menu UI Automation Loop (Auto Retry, Skip Cutscene, Open Chests, Family Roll)
+-- 6. AOT:R Mission & Menu UI Automation Loop
 task.spawn(function()
     while State.Running do
         task.wait(0.4)
         local interface = PlayerGui:FindFirstChild("Interface")
         if interface then
-            -- Auto Skip Cutscene
             if Config.AutoSkipCutscene then
                 local skipBtn = interface:FindFirstChild("Skip")
                 if isGuiVisible(skipBtn) then
@@ -1364,7 +1729,6 @@ task.spawn(function()
                 end
             end
 
-            -- Auto Open Raid Chests
             local chests = interface:FindFirstChild("Chests")
             if chests then
                 local finishBtn = chests:FindFirstChild("Finish")
@@ -1394,7 +1758,6 @@ task.spawn(function()
                 end
             end
 
-            -- Auto Retry Mission / Raid
             if Config.AutoRetry then
                 local rewards = interface:FindFirstChild("Rewards")
                 local rMain = rewards and rewards:FindFirstChild("Main")
@@ -1416,7 +1779,6 @@ task.spawn(function()
                 end
             end
 
-            -- Auto Family Roll (Uses BOTH Direct Remote `Family -> Roll` AND UI Button Click!)
             if Config.AutoRollFamily then
                 local currentFamily = getCurrentFamilyName()
                 if Config.StopOnRareFamily and isRareFamily(currentFamily) then
@@ -1453,7 +1815,7 @@ task.spawn(function()
     end
 end)
 
---// Stealth ESP System (Also highlights Utgard & all-map Refill stations!)
+--// Stealth ESP System (AOT:R Titans/Refills + Pixel Blade Enemies)
 local function clearESP()
     for _, item in pairs(State.ESPObjects) do
         pcall(function()
@@ -1506,12 +1868,27 @@ local function updateESP()
             end
         end
     end
+
+    if Config.PB_EnemyESP then
+        for _, v in ipairs(workspace:GetChildren()) do
+            if v ~= Character and v:IsA("Model") and isPBMobAlive(v) and not State.ESPObjects[v] then
+                local hl = Instance.new("Highlight")
+                hl.Name = randomIdentifier(10)
+                hl.FillColor = Color3.fromRGB(180, 80, 255)
+                hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                hl.FillTransparency = 0.55
+                hl.Adornee = v
+                hl.Parent = StealthESPFolder
+                State.ESPObjects[v] = hl
+            end
+        end
+    end
 end
 
 task.spawn(function()
     while State.Running do
         task.wait(1)
-        if Config.TitanESP or Config.RefillESP then
+        if Config.TitanESP or Config.RefillESP or Config.PB_EnemyESP then
             pcall(updateESP)
         end
         if Config.ExpandNapes then
@@ -1520,7 +1897,6 @@ task.spawn(function()
     end
 end)
 
---// Apply RemoveDamageText if saved in Config
 local dmgTextConn = nil
 local function applyRemoveDamageText(state)
     local interface = PlayerGui:FindFirstChild("Interface")
@@ -1553,7 +1929,7 @@ if Config.RemoveDamageText then
 end
 
 --//===========================================================================
---// DELTA MOBILE & PC CUSTOM GUI (RANDOMIZED STEALTH NAMES)
+--// DELTA MOBILE & PC CUSTOM GUI (MULTI-GAME HUB: AOT:R + PIXEL BLADE)
 --//===========================================================================
 
 local ScreenGui = Instance.new("ScreenGui")
@@ -1564,10 +1940,10 @@ ScreenGui.Parent = getSafeGuiParent()
 
 local FloatButton = Instance.new("TextButton")
 FloatButton.Name = randomIdentifier(10)
-FloatButton.Size = UDim2.new(0, 54, 0, 54)
-FloatButton.Position = UDim2.new(0, 18, 0.5, -27)
+FloatButton.Size = UDim2.new(0, 56, 0, 56)
+FloatButton.Position = UDim2.new(0, 18, 0.5, -28)
 FloatButton.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
-FloatButton.Text = "🛡️\nAOT"
+FloatButton.Text = CurrentGame == "PixelBlade" and "🗡️\nPB" or "🛡️\nHUB"
 FloatButton.TextColor3 = Color3.fromRGB(90, 230, 145)
 FloatButton.Font = Enum.Font.GothamBlack
 FloatButton.TextSize = 13
@@ -1587,8 +1963,8 @@ makeDraggable(FloatButton, FloatButton)
 
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = randomIdentifier(12)
-MainFrame.Size = UDim2.new(0, 540, 0, 365)
-MainFrame.Position = UDim2.new(0.5, -270, 0.5, -182)
+MainFrame.Size = UDim2.new(0, 560, 0, 380)
+MainFrame.Position = UDim2.new(0.5, -280, 0.5, -190)
 MainFrame.BackgroundColor3 = Color3.fromRGB(16, 17, 23)
 MainFrame.BorderSizePixel = 0
 MainFrame.Parent = ScreenGui
@@ -1616,10 +1992,10 @@ headerCorner.Parent = Header
 makeDraggable(Header, MainFrame)
 
 local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(1, -135, 1, 0)
+TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text = "🛡️ AOT: Revolution | Delta Hub v2.1 [Utgard + AutoSave]"
+TitleLabel.Text = "🛡️ Delta Multi-Hub v3.0 | AOT:R + Pixel Blade"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -1627,10 +2003,10 @@ TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Parent = Header
 
 local SecurityBadge = Instance.new("TextLabel")
-SecurityBadge.Size = UDim2.new(0, 76, 0, 22)
-SecurityBadge.Position = UDim2.new(1, -122, 0.5, -11)
+SecurityBadge.Size = UDim2.new(0, 82, 0, 22)
+SecurityBadge.Position = UDim2.new(1, -128, 0.5, -11)
 SecurityBadge.BackgroundColor3 = Color3.fromRGB(25, 65, 42)
-SecurityBadge.Text = "🛡️ محمي"
+SecurityBadge.Text = CurrentGame == "PixelBlade" and "🗡️ Pixel" or "⚔️ AOT:R"
 SecurityBadge.TextColor3 = Color3.fromRGB(95, 240, 150)
 SecurityBadge.Font = Enum.Font.GothamBold
 SecurityBadge.TextSize = 11
@@ -1654,11 +2030,14 @@ local minCorner = Instance.new("UICorner")
 minCorner.CornerRadius = UDim.new(0, 6)
 minCorner.Parent = MinimizeBtn
 
-local Sidebar = Instance.new("Frame")
-Sidebar.Size = UDim2.new(0, 145, 1, -52)
+local Sidebar = Instance.new("ScrollingFrame")
+Sidebar.Size = UDim2.new(0, 152, 1, -52)
 Sidebar.Position = UDim2.new(0, 8, 0, 46)
 Sidebar.BackgroundColor3 = Color3.fromRGB(22, 23, 31)
 Sidebar.BorderSizePixel = 0
+Sidebar.ScrollBarThickness = 2
+Sidebar.CanvasSize = UDim2.new(0, 0, 0, 0)
+Sidebar.AutomaticCanvasSize = Enum.AutomaticSize.Y
 Sidebar.Parent = MainFrame
 
 local sideCorner = Instance.new("UICorner")
@@ -1666,18 +2045,19 @@ sideCorner.CornerRadius = UDim.new(0, 8)
 sideCorner.Parent = Sidebar
 
 local sideLayout = Instance.new("UIListLayout")
-sideLayout.Padding = UDim.new(0, 6)
+sideLayout.Padding = UDim.new(0, 5)
 sideLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 sideLayout.SortOrder = Enum.SortOrder.LayoutOrder
 sideLayout.Parent = Sidebar
 
 local sidePad = Instance.new("UIPadding")
 sidePad.PaddingTop = UDim.new(0, 8)
+sidePad.PaddingBottom = UDim.new(0, 8)
 sidePad.Parent = Sidebar
 
 local ContentArea = Instance.new("Frame")
-ContentArea.Size = UDim2.new(1, -167, 1, -52)
-ContentArea.Position = UDim2.new(0, 159, 0, 46)
+ContentArea.Size = UDim2.new(1, -174, 1, -52)
+ContentArea.Position = UDim2.new(0, 166, 0, 46)
 ContentArea.BackgroundColor3 = Color3.fromRGB(22, 23, 31)
 ContentArea.BorderSizePixel = 0
 ContentArea.Parent = MainFrame
@@ -1689,15 +2069,28 @@ contentCorner.Parent = ContentArea
 local Tabs = {}
 local TabButtons = {}
 
+local function selectTab(tabName)
+    for _, p in pairs(Tabs) do p.Visible = false end
+    for _, b in pairs(TabButtons) do
+        b.BackgroundColor3 = Color3.fromRGB(32, 34, 46)
+        b.TextColor3 = Color3.fromRGB(200, 200, 210)
+    end
+    if Tabs[tabName] and TabButtons[tabName] then
+        Tabs[tabName].Visible = true
+        TabButtons[tabName].BackgroundColor3 = Color3.fromRGB(212, 175, 55)
+        TabButtons[tabName].TextColor3 = Color3.fromRGB(16, 17, 23)
+    end
+end
+
 local function createTab(tabName, order)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -14, 0, 34)
+    btn.Size = UDim2.new(1, -12, 0, 32)
     btn.LayoutOrder = order
     btn.BackgroundColor3 = Color3.fromRGB(32, 34, 46)
     btn.Text = tabName
     btn.TextColor3 = Color3.fromRGB(200, 200, 210)
     btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 12
+    btn.TextSize = 11
     btn.Parent = Sidebar
 
     local btnCorner = Instance.new("UICorner")
@@ -1729,14 +2122,7 @@ local function createTab(tabName, order)
     pagePad.Parent = page
 
     btn.MouseButton1Click:Connect(function()
-        for _, p in pairs(Tabs) do p.Visible = false end
-        for _, b in pairs(TabButtons) do
-            b.BackgroundColor3 = Color3.fromRGB(32, 34, 46)
-            b.TextColor3 = Color3.fromRGB(200, 200, 210)
-        end
-        page.Visible = true
-        btn.BackgroundColor3 = Color3.fromRGB(212, 175, 55)
-        btn.TextColor3 = Color3.fromRGB(16, 17, 23)
+        selectTab(tabName)
     end)
 
     Tabs[tabName] = page
@@ -1936,21 +2322,128 @@ local function addActionButton(parent, labelText, callback)
 end
 
 --//===========================================================================
---// BUILD TABS & CONTROLS (RESTORES SAVED SETTINGS AUTOMATICALLY)
+--// BUILD TABS & CONTROLS (AOT:R + PIXEL BLADE + SHARED SECURITY)
 --//===========================================================================
 
-local TabFarm = createTab("⚔️ الفارم (Farm)", 1)
-local TabSecurity = createTab("🛡️ الحماية (Anti-Ban)", 2)
-local TabCombat = createTab("⚡ المساعدات", 3)
-local TabESP = createTab("👁️ الرادار (ESP)", 4)
-local TabMisc = createTab("⚙️ العائلات واللوبي", 5)
+local TabPBFarm = createTab("🗡️ Pixel Blade قتال", 1)
+local TabPBLoot = createTab("🎁 Pixel صناديق وبوابات", 2)
+local TabFarm = createTab("⚔️ AOT:R الفارم", 3)
+local TabCombat = createTab("⚡ AOT:R المساعدات", 4)
+local TabMisc = createTab("🎲 AOT:R العائلات", 5)
+local TabSecurity = createTab("🛡️ الحماية (Anti-Ban)", 6)
+local TabESP = createTab("👁️ الرادار والفريمات", 7)
 
-Tabs["⚔️ الفارم (Farm)"].Visible = true
-TabButtons["⚔️ الفارم (Farm)"].BackgroundColor3 = Color3.fromRGB(212, 175, 55)
-TabButtons["⚔️ الفارم (Farm)"].TextColor3 = Color3.fromRGB(16, 17, 23)
+-- Automatically open the detected game's main tab first!
+if CurrentGame == "PixelBlade" then
+    selectTab("🗡️ Pixel Blade قتال")
+else
+    selectTab("⚔️ AOT:R الفارم")
+end
 
--- [TAB 1: AUTO FARM]
-addSectionHeader(TabFarm, "قتل العمالقة بالسيوف (Auto Kill Blades)")
+-- ============================================================================
+-- [PIXEL BLADE TAB 1: FARM & COMBAT]
+-- ============================================================================
+addSectionHeader(TabPBFarm, "🗡️ Pixel Blade - الفارم والقتال التلقائي")
+
+addToggle(TabPBFarm, "فارم الدنجن التلقائي (Auto Farm Dungeon)", Config.PB_AutoFarmDungeon, function(val)
+    Config.PB_AutoFarmDungeon = val
+    State.PB_EnteredBossRoom = false
+    if val then
+        applyPBTempBuffAndHeal()
+    end
+end)
+
+addToggle(TabPBFarm, "فارم الغارات التلقائي (Auto Farm Raids)", Config.PB_AutoFarmRaid, function(val)
+    Config.PB_AutoFarmRaid = val
+    if val then
+        applyPBTempBuffAndHeal()
+    end
+end)
+
+addToggle(TabPBFarm, "قتل جماعي تلقائي حولك (Kill Aura + Tornado)", Config.PB_KillAura, function(val)
+    Config.PB_KillAura = val
+end)
+
+addStepper(TabPBFarm, "مدى الـ Kill Aura", 15, 150, 5, Config.PB_KillAuraRange, function(val)
+    Config.PB_KillAuraRange = val
+end)
+
+addToggle(TabPBFarm, "تقوية الضرر الخارق + شفاء تلقائي (God Buff & Heal)", Config.PB_GodBuffAndHeal, function(val)
+    Config.PB_GodBuffAndHeal = val
+    if val then
+        applyPBTempBuffAndHeal()
+    end
+end)
+
+addToggle(TabPBFarm, "تكسير الصناديق/الأغراض تلقائياً (Auto Breakables)", Config.PB_AutoBreakables, function(val)
+    Config.PB_AutoBreakables = val
+end)
+
+addSectionHeader(TabPBFarm, "🎯 تكبير هيت بوكس الأعداء (Hitbox Expander)")
+
+addToggle(TabPBFarm, "تكبير هيت بوكس الأعداء (Expand Enemy Hitbox)", Config.PB_ExpandHitbox, function(val)
+    Config.PB_ExpandHitbox = val
+end)
+
+addStepper(TabPBFarm, "حجم هيت بوكس الأعداء", 5, 80, 5, Config.PB_HitboxSize, function(val)
+    Config.PB_HitboxSize = val
+end)
+
+-- ============================================================================
+-- [PIXEL BLADE TAB 2: UPGRADES, CHESTS, WISHES & PORTALS]
+-- ============================================================================
+addSectionHeader(TabPBLoot, "⚡ الترقيات والصناديق والأمنيات (Pixel Blade)")
+
+addToggle(TabPBLoot, "اختيار الترقية تلقائياً بالدنجن (Auto Pick Upgrade)", Config.PB_AutoUpgrade, function(val)
+    Config.PB_AutoUpgrade = val
+end)
+
+addToggle(TabPBLoot, "إخفاء نافذة الترقية المزعجة (Hide Upgrade Popup)", Config.PB_HideUpgradePopup, function(val)
+    Config.PB_HideUpgradePopup = val
+end)
+
+addToggle(TabPBLoot, "فتح جميع الصناديق بالحقيبة تلقائياً (Auto Open Chests)", Config.PB_AutoOpenChests, function(val)
+    Config.PB_AutoOpenChests = val
+end)
+
+addToggle(TabPBLoot, "فتح الأمنيات تلقائياً (Auto Open Wishes)", Config.PB_AutoOpenWishes, function(val)
+    Config.PB_AutoOpenWishes = val
+end)
+
+addToggle(TabPBLoot, "استلام المهام اليومية تلقائياً (Auto Claim Quests)", Config.PB_AutoClaimQuests, function(val)
+    Config.PB_AutoClaimQuests = val
+end)
+
+addToggle(TabPBLoot, "استلام الإنجازات تلقائياً (Auto Claim Achievements)", Config.PB_AutoClaimAchievements, function(val)
+    Config.PB_AutoClaimAchievements = val
+end)
+
+addSectionHeader(TabPBLoot, "🌀 دخول البوابات التلقائي (Auto Dungeon Portal)")
+
+addCycleButton(TabPBLoot, "اختيار البوابة (Select Portal)", { "Grasslands", "AncientSands" }, Config.PB_SelectedDungeon, function(opt)
+    Config.PB_SelectedDungeon = opt
+end)
+
+addCycleButton(TabPBLoot, "اختيار الصعوبة (Difficulty)", { "Normal", "Heroic", "Nightmare" }, Config.PB_SelectedDifficulty, function(opt)
+    Config.PB_SelectedDifficulty = opt
+end)
+
+addToggle(TabPBLoot, "دخول البوابة تلقائياً (Auto Join Portal)", Config.PB_AutoJoinPortal, function(val)
+    Config.PB_AutoJoinPortal = val
+end)
+
+addActionButton(TabPBLoot, "🏠 العودة إلى اللوبي في Pixel Blade (Return to Lobby)", function()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum.Health = 0
+    end
+end)
+
+-- ============================================================================
+-- [AOT:R TAB 3: AUTO FARM]
+-- ============================================================================
+addSectionHeader(TabFarm, "⚔️ AOT:R - قتل العمالقة بالسيوف (Auto Kill Blades)")
 
 addToggle(TabFarm, "تفعيل القتل التلقائي (Auto Kill Titans)", Config.AutoKillBlades, function(val)
     Config.AutoKillBlades = val
@@ -2009,69 +2502,9 @@ addToggle(TabFarm, "تفعيل المهارات تلقائياً (Titan Ripper)"
     Config.TitanRipper = val
 end)
 
--- [TAB 2: 🛡️ SECURITY & ANTI-BAN]
-addSectionHeader(TabSecurity, "🛡️ أنظمة الحماية ضد الباند والطرد")
-
-addToggle(TabSecurity, "تشغيل السكربت والإعدادات تلقائياً بالغارة القادمة", Config.AutoExecuteOnTeleport, function(val)
-    Config.AutoExecuteOnTeleport = val
-    if val then setupAutoExecuteOnTeleport() end
-end)
-
-addToggle(TabSecurity, "حارس وقت المهمة (ينتظر 20ث قبل قتل آخر عملاق)", Config.SafeMissionTimerGuard, function(val)
-    Config.SafeMissionTimerGuard = val
-end)
-
-addStepper(TabSecurity, "الحد الآمن لإنهاء المهمة (ثانية)", 17, 45, 1, Config.MinSafeMissionSeconds, function(val)
-    Config.MinSafeMissionSeconds = val
-end)
-
-addToggle(TabSecurity, "منع الطرد من الكلاينت (Anti-Kick Hook)", Config.AntiKick, function(val)
-    Config.AntiKick = val
-end)
-
-addToggle(TabSecurity, "تمويه حجم الهيت بوكس عن فحص اللعبة (Nape Spoof)", Config.SpoofNapeProperties, function(val)
-    Config.SpoofNapeProperties = val
-end)
-
-addToggle(TabSecurity, "أنسنة سرعة الضربات والضرر (Humanize Hits)", Config.HumanizeAttacks, function(val)
-    Config.HumanizeAttacks = val
-end)
-
-addToggle(TabSecurity, "مانع الطيران العشوائي خارج الخريطة (Anti-Fling)", Config.VelocityAntiFling, function(val)
-    Config.VelocityAntiFling = val
-end)
-
-addSectionHeader(TabSecurity, "👮 حماية ضد المشرفين والخمول (Staff & AFK)")
-
-addToggle(TabSecurity, "الهروب للوبي عند دخول مشرف/أدمن (Anti-Staff)", Config.AntiStaffProtection, function(val)
-    Config.AntiStaffProtection = val
-end)
-
-addToggle(TabSecurity, "إيقاف الفارم إذا دخل لاعب غريب معك (Solo Safe)", Config.AntiStrangerInSolo, function(val)
-    Config.AntiStrangerInSolo = val
-end)
-
-addToggle(TabSecurity, "مانع الطرد بسبب الخمول (Anti-AFK 24/7)", Config.AntiAFK, function(val)
-    Config.AntiAFK = val
-end)
-
-addActionButton(TabSecurity, "🚨 زر الطوارئ: إيقاف كل التفعيلات فوراً (Panic Stop)", function()
-    Config.AutoKillBlades = false
-    Config.AutoFarmTS = false
-    Config.ExpandNapes = false
-    Config.TitanRipper = false
-    State.IsTSHovering = false
-    State.TSHoverPos = nil
-    saveConfig()
-    pcall(updateAllNapes)
-    pcall(clearESP)
-    if HumanoidRootPart then
-        HumanoidRootPart.Anchored = false
-        HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
-    end
-end)
-
--- [TAB 3: COMBAT & MISSIONS]
+-- ============================================================================
+-- [AOT:R TAB 4: COMBAT & MISSIONS]
+-- ============================================================================
 addSectionHeader(TabCombat, "الذخيرة والتعبئة (شامل أوتغارد وجميع الخرائط)")
 
 addToggle(TabCombat, "تبديل السيوف تلقائياً (Auto Reload Blades)", Config.AutoReloadBlades, function(val)
@@ -2112,45 +2545,10 @@ addToggle(TabCombat, "إشعارات القتل على الشاشة (Kill Notifi
     Config.KillNotifications = val
 end)
 
--- [TAB 4: ESP & PERFORMANCE]
-addSectionHeader(TabESP, "الرادار المخفي (Stealth ESP)")
-
-addToggle(TabESP, "كشف العمالقة (Titan Highlight ESP)", Config.TitanESP, function(val)
-    Config.TitanESP = val
-    if not val then clearESP() else pcall(updateESP) end
-end)
-
-addToggle(TabESP, "كشف نقاط التعبئة (Refill Station ESP)", Config.RefillESP, function(val)
-    Config.RefillESP = val
-    if not val then clearESP() else pcall(updateESP) end
-end)
-
-addSectionHeader(TabESP, "تحسين الأداء والفريمات (FPS & Visuals)")
-
-addToggle(TabESP, "إخفاء أرقام الضرر (Remove Damage Text)", Config.RemoveDamageText, function(val)
-    Config.RemoveDamageText = val
-    applyRemoveDamageText(val)
-end)
-
-addActionButton(TabESP, "🚀 تحسين الفريمات للجوال (FPS Boost)", function()
-    pcall(function()
-        Lighting.GlobalShadows = false
-        Lighting.FogEnd = 9e9
-        for _, v in ipairs(workspace:GetDescendants()) do
-            if v:IsA("BasePart") then
-                v.Material = Enum.Material.SmoothPlastic
-                v.Reflectance = 0
-            elseif v:IsA("Decal") or v:IsA("Texture") then
-                v.Transparency = 1
-            elseif v:IsA("ParticleEmitter") or v:IsA("Trail") then
-                v.Enabled = false
-            end
-        end
-    end)
-end)
-
--- [TAB 5: FAMILY ROLL, LOBBY & SETTINGS]
-addSectionHeader(TabMisc, "لفات العائلات في القائمة الرئيسية (Family Roll)")
+-- ============================================================================
+-- [AOT:R TAB 5: FAMILY ROLL & TELEPORT]
+-- ============================================================================
+addSectionHeader(TabMisc, "لفات العائلات في القائمة الرئيسية (AOT:R Family Roll)")
 
 addToggle(TabMisc, "لف العائلات تلقائياً (Auto Family Roll)", Config.AutoRollFamily, function(val)
     Config.AutoRollFamily = val
@@ -2179,23 +2577,88 @@ addActionButton(TabMisc, "🎲 لف العائلة مرة واحدة الآن (R
     end
 end)
 
-addSectionHeader(TabMisc, "التنقل السريع (Quick Teleport)")
+addSectionHeader(TabMisc, "التنقل السريع (AOT:R Quick Teleport)")
 
-addActionButton(TabMisc, "🏠 الانتقال إلى اللوبي (Return to Lobby)", function()
+addActionButton(TabMisc, "🏠 الانتقال إلى لوبي AOT:R (Return to Lobby)", function()
     saveConfig()
     setupAutoExecuteOnTeleport()
-    TeleportService:Teleport(PLACE_IDS.Lobby, LocalPlayer)
+    TeleportService:Teleport(AOTR_PLACE_IDS.Lobby, LocalPlayer)
 end)
 
-addActionButton(TabMisc, "🎮 الانتقال للقائمة الرئيسية (Main Menu)", function()
+addActionButton(TabMisc, "🎮 الانتقال للقائمة الرئيسية AOT:R (Main Menu)", function()
     saveConfig()
     setupAutoExecuteOnTeleport()
-    TeleportService:Teleport(PLACE_IDS.MainMenu, LocalPlayer)
+    TeleportService:Teleport(AOTR_PLACE_IDS.MainMenu, LocalPlayer)
 end)
 
-addSectionHeader(TabMisc, "إدارة السكربت والإعدادات (Script Control)")
+-- ============================================================================
+-- [SHARED TAB 6: 🛡️ SECURITY & ANTI-BAN]
+-- ============================================================================
+addSectionHeader(TabSecurity, "🛡️ أنظمة الحماية المشتركة وحفظ الإعدادات")
 
-addActionButton(TabMisc, "🗑️ مسح الإعدادات المحفوظة (Reset Saved Config)", function()
+addToggle(TabSecurity, "تشغيل السكربت والإعدادات تلقائياً بالغارة/الدنجن القادم", Config.AutoExecuteOnTeleport, function(val)
+    Config.AutoExecuteOnTeleport = val
+    if val then setupAutoExecuteOnTeleport() end
+end)
+
+addToggle(TabSecurity, "حارس وقت مهمة AOT:R (ينتظر 20ث قبل قتل آخر عملاق)", Config.SafeMissionTimerGuard, function(val)
+    Config.SafeMissionTimerGuard = val
+end)
+
+addStepper(TabSecurity, "الحد الآمن لإنهاء المهمة (ثانية)", 17, 45, 1, Config.MinSafeMissionSeconds, function(val)
+    Config.MinSafeMissionSeconds = val
+end)
+
+addToggle(TabSecurity, "منع الطرد من الكلاينت (Anti-Kick Hook)", Config.AntiKick, function(val)
+    Config.AntiKick = val
+end)
+
+addToggle(TabSecurity, "تمويه حجم الهيت بوكس عن فحص اللعبة (Hitbox Spoof)", Config.SpoofNapeProperties, function(val)
+    Config.SpoofNapeProperties = val
+end)
+
+addToggle(TabSecurity, "أنسنة سرعة الضربات والضرر (Humanize Hits)", Config.HumanizeAttacks, function(val)
+    Config.HumanizeAttacks = val
+end)
+
+addToggle(TabSecurity, "مانع الطيران العشوائي خارج الخريطة (Anti-Fling)", Config.VelocityAntiFling, function(val)
+    Config.VelocityAntiFling = val
+end)
+
+addSectionHeader(TabSecurity, "👮 حماية ضد المشرفين والخمول (Staff & AFK)")
+
+addToggle(TabSecurity, "إيقاف الفارم عند دخول مشرف/أدمن (Anti-Staff)", Config.AntiStaffProtection, function(val)
+    Config.AntiStaffProtection = val
+end)
+
+addToggle(TabSecurity, "إيقاف الفارم إذا دخل لاعب غريب معك (Solo Safe)", Config.AntiStrangerInSolo, function(val)
+    Config.AntiStrangerInSolo = val
+end)
+
+addToggle(TabSecurity, "مانع الطرد بسبب الخمول (Anti-AFK 24/7)", Config.AntiAFK, function(val)
+    Config.AntiAFK = val
+end)
+
+addActionButton(TabSecurity, "🚨 زر الطوارئ: إيقاف كل التفعيلات فوراً (Panic Stop)", function()
+    Config.AutoKillBlades = false
+    Config.AutoFarmTS = false
+    Config.ExpandNapes = false
+    Config.TitanRipper = false
+    Config.PB_AutoFarmDungeon = false
+    Config.PB_AutoFarmRaid = false
+    Config.PB_KillAura = false
+    State.IsTSHovering = false
+    State.TSHoverPos = nil
+    saveConfig()
+    pcall(updateAllNapes)
+    pcall(clearESP)
+    if HumanoidRootPart then
+        HumanoidRootPart.Anchored = false
+        HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+    end
+end)
+
+addActionButton(TabSecurity, "🗑️ مسح الإعدادات المحفوظة (Reset Saved Config)", function()
     if delfile and isfile then
         pcall(function()
             if isfile(CONFIG_FILE) then delfile(CONFIG_FILE) end
@@ -2206,10 +2669,54 @@ addActionButton(TabMisc, "🗑️ مسح الإعدادات المحفوظة (Re
     end
 end)
 
-addActionButton(TabMisc, "❌ إغلاق وحذف السكربت بالكامل (Unload Script)", function()
+addActionButton(TabSecurity, "❌ إغلاق وحذف السكربت بالكامل (Unload Script)", function()
     if getgenv and getgenv().AOTR_Delta_Cleanup then
         getgenv().AOTR_Delta_Cleanup()
     end
+end)
+
+-- ============================================================================
+-- [SHARED TAB 7: ESP & PERFORMANCE]
+-- ============================================================================
+addSectionHeader(TabESP, "الرادار المخفي (Stealth ESP)")
+
+addToggle(TabESP, "كشف أعداء Pixel Blade (Pixel Blade Enemy ESP)", Config.PB_EnemyESP, function(val)
+    Config.PB_EnemyESP = val
+    if not val then clearESP() else pcall(updateESP) end
+end)
+
+addToggle(TabESP, "كشف عمالقة AOT:R (Titan Highlight ESP)", Config.TitanESP, function(val)
+    Config.TitanESP = val
+    if not val then clearESP() else pcall(updateESP) end
+end)
+
+addToggle(TabESP, "كشف نقاط التعبئة AOT:R (Refill Station ESP)", Config.RefillESP, function(val)
+    Config.RefillESP = val
+    if not val then clearESP() else pcall(updateESP) end
+end)
+
+addSectionHeader(TabESP, "تحسين الأداء والفريمات (FPS & Visuals)")
+
+addToggle(TabESP, "إخفاء أرقام الضرر (Remove Damage Text)", Config.RemoveDamageText, function(val)
+    Config.RemoveDamageText = val
+    applyRemoveDamageText(val)
+end)
+
+addActionButton(TabESP, "🚀 تحسين الفريمات للجوال (FPS Boost)", function()
+    pcall(function()
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 9e9
+        for _, v in ipairs(workspace:GetDescendants()) do
+            if v:IsA("BasePart") then
+                v.Material = Enum.Material.SmoothPlastic
+                v.Reflectance = 0
+            elseif v:IsA("Decal") or v:IsA("Texture") then
+                v.Transparency = 1
+            elseif v:IsA("ParticleEmitter") or v:IsA("Trail") then
+                v.Enabled = false
+            end
+        end
+    end)
 end)
 
 --// Toggle Menu Visibility
@@ -2234,6 +2741,9 @@ local function cleanupScript()
     Config.AutoKillBlades = false
     Config.AutoFarmTS = false
     Config.ExpandNapes = false
+    Config.PB_AutoFarmDungeon = false
+    Config.PB_AutoFarmRaid = false
+    Config.PB_KillAura = false
     pcall(function()
         if HumanoidRootPart then HumanoidRootPart.Anchored = false end
     end)
@@ -2264,4 +2774,4 @@ if getgenv then
     getgenv().AOTR_Delta_Cleanup = cleanupScript
 end
 
-print("[🛡️ AOT:R Protected Delta Hub v2.1] Loaded! Utgard Refill + AutoSave Active.")
+print("[🛡️ Delta Multi-Hub v3.0] Loaded! Active Game Detected: " .. tostring(CurrentGame))
