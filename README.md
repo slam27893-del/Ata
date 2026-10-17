@@ -1,8 +1,8 @@
-# 🛡️ Delta Multi-Game Hub v3.0 [Attack on Titan: Revolution + Pixel Blade]
+# 🛡️ Delta Multi-Game Hub v3.1 [Attack on Titan: Revolution + Pixel Blade + Auto Fishing]
 
 سكربت شامل ومتعدد الألعاب (**Multi-Game Hub**) يعمل بنفس الرابط الواحد تلقائياً على كلٍ من:
 1. ⚔️ **Attack on Titan: Revolution (AOT:R)** (جميع الخرائط بما فيها أوتغارد Utgard + الغارات Raids + لفات العائلات).
-2. 🗡️ **Pixel Blade** (فارم الدنجن والغرف تلقائياً + فارم الغارات + Kill Aura + تقوية الضرر الخارق والشفاء + فتح الصناديق والأمنيات + دخول البوابات تلقائياً).
+2. 🗡️ **Pixel Blade** (فارم الدنجن والغرف تلقائياً + فارم الغارات + **🎣 الصيد التلقائي بالصنارة Auto Fishing** + Kill Aura + تقوية الضرر الخارق والشفاء + فتح الصناديق والأمنيات + دخول البوابات تلقائياً).
 
 مزود **بحفظ تلقائي للإعدادات وتشغيل تلقائي بين الغارات والدنجن (`Auto-Save & Queue On Teleport`)** + **نظام حماية متعدد الطبقات (`Multi-Layer Anti-Ban & Stealth Protection`)** لمشغل **Delta Executor** (أندرويد، iOS، والكمبيوتر).
 
@@ -18,22 +18,31 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/slam27893-del/Ata/mai
 
 ---
 
-## 🗡️ مميزات ماب Pixel Blade (جديد في v3.0)
+## 🎣 الصيد التلقائي بالصنارة في Pixel Blade (`🎣 Pixel صيد بالصنارة` — جديد في v3.1)
+
+- **Auto Fish (رمي الصنارة + حل الميني جيم + السحب التلقائي):**
+  1. **تجهيز الصنارة ورميها تلقائياً:** يمسك الصنارة من الحقيبة (`Backpack`) ويتفاعل مع نقطة الصيد (`ProximityPrompt` + ضغط مطول `E` / زر الجوال).
+  2. **الدائرة الخضراء (`RGB 39, 162, 71` / `circle_popup`):** يضغط مطولاً تلقائياً عند ظهور الدائرة الخضراء الأولى (`1.5s`) والدوائر الخضراء الإضافية (`1.0s`).
+  3. **الدائرة الزرقاء (`RGB 195, 223, 224` / `Reel`):** ينقر بسرعة تلقائياً (`12x` نقرات سريعة + زر الجوال + الريموت) لسحب السمكة فوراً.
+  4. **قفل شريط الصيد (`Bar Lock`) + حارس المهلة (`15s Timeout`):** يثبت شريط الصيد على الهدف تلقائياً، وإذا لم يعلق سمك خلال 15 ثانية يعيد رمي الصنارة تلقائياً بدون توقف.
+  5. **عداد مباشر للأسماك المصطادة وحالة الصيد** داخل القائمة مع التحكم الكامل بسرعة الرمي والضغط والنقر.
+
+---
+
+## 🗡️ مميزات القتال والدنجن في Pixel Blade
 
 1. **⚔️ قسم الفارم والقتال (`🗡️ Pixel Blade قتال`):**
-   - **Auto Farm Dungeon:** الانتقال التلقائي لأقرب وحش حي، تخطي الغرف (`7`, `8`, `9` حسب الصعوبة `Normal` / `Heroic` / `Nightmare`)، والتعامل الخاص مع الزعماء (`Atticus`, `Maneater`, `Nekros`, `DarkNekros`) مع تفعيل `Noclip` وتثبيت السرعة.
-   - **Auto Farm Raids:** فارم الغارات التلقائي وقتل زعماء الرايد.
-   - **Kill Aura + Tornado:** ضرب جميع الأعداء المحيطين بك تلقائياً (`onHit` + `useAbility: tornado` + `abilityHit`).
-   - **God Buff & Auto Heal:** تفعيل تقوية الضرر والسرعة (`tempbuff`) والشفاء التلقائي المستمر (`heal`).
-   - **Auto Breakables:** تكسير الصناديق والأغراض القابلة للكسر في الماب تلقائياً.
-   - **Expand Enemy Hitbox:** تكبير هيت بوكس الأعداء مع التحكم بالحجم.
+   - **Auto Farm Dungeon & Auto Farm Raids**
+   - **Kill Aura + Tornado**
+   - **God Buff & Auto Heal**
+   - **Infinite Dash & No Ability Cooldown (`داش لا نهائي وإلغاء انتظار المهارات`)**
+   - **Auto Breakables & Expand Enemy Hitbox**
 
 2. **🎁 قسم الترقيات والصناديق والبوابات (`🎁 Pixel صناديق وبوابات`):**
-   - **Auto Pick Upgrade & Hide Popup:** اختيار بطاقات الترقية تلقائياً أثناء الدنجن وإخفاء نافذة الترقية المزعجة.
-   - **Auto Open All Chests:** فتح جميع الصناديق الموجودة في الحقيبة (`Loot`) تلقائياً.
-   - **Auto Open Wishes:** فتح الأمنيات (`Wishes`) تلقائياً.
-   - **Auto Claim Daily Quests & Achievements:** استلام جوائز المهام اليومية والإنجازات تلقائياً.
-   - **Auto Join Dungeon Portal:** اختيار البوابة (`Grasslands` / `AncientSands`) والصعوبة (`Normal` / `Heroic` / `Nightmare`) والدخول التلقائي المستمر مع حفظ الإعدادات وتشغيل السكربت تلقائياً داخل الدنجن!
+   - **Auto Pick Upgrade & Hide Popup**
+   - **Auto Open All Chests & Auto Open Wishes**
+   - **Auto Claim Daily Quests & Achievements**
+   - **Auto Join Dungeon Portal (`Grasslands` / `AncientSands` — `Normal` / `Heroic` / `Nightmare`)**
 
 ---
 

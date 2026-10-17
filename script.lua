@@ -94,7 +94,8 @@ local charAddedConn = LocalPlayer.CharacterAdded:Connect(updateCharacterRefs)
 --//===========================================================================
 
 local PIXEL_BLADE_PLACE_IDS = {
-    [18172550962] = true
+    [18172550962] = true,
+    [18172553902] = true
 }
 
 local AOTR_PLACE_IDS = {
@@ -219,7 +220,20 @@ local Config = {
     PB_SelectedDungeon = "Grasslands",
     PB_SelectedDifficulty = "Normal",
     PB_AutoJoinPortal = false,
-    PB_EnemyESP = false
+    PB_EnemyESP = false,
+    PB_InfDashAndNoCD = false,
+
+    -- [Game 2] Pixel Blade Auto Fishing (الصيد التلقائي بالصنارة)
+    PB_AutoFish = false,
+    PB_AutoEquipRod = true,
+    PB_AutoFishMinigame = true,
+    PB_FishCastHold = 1.0,
+    PB_FishGreenHold = 1.5,
+    PB_FishFollowGreenHold = 1.0,
+    PB_FishTapCount = 12,
+    PB_FishTapInterval = 0.08,
+    PB_FishPostWait = 1.8,
+    PB_FishTimeout = 15
 }
 
 local function saveConfig()
@@ -314,7 +328,10 @@ local State = {
     OriginalNapeSizes = {},
     Connections = {},
     ESPObjects = {},
-    PB_EnteredBossRoom = false
+    PB_EnteredBossRoom = false,
+    PB_FishCaughtCount = 0,
+    PB_LastCastTime = 0,
+    PB_FishStatusText = "في انتظار التفعيل..."
 }
 
 local function getSafeGuiParent()
@@ -1227,6 +1244,399 @@ local function pbKillAllNearby(maxRange, isRaid)
     end
 end
 
+--// Pixel Blade Infinite Dash & No Ability Cooldown (via localChar environment)
+local function applyPBInfDashAndNoCD()
+    if not Config.PB_InfDashAndNoCD or not Character then return end
+    pcall(function()
+        if getsenv then
+            local lc = Character:FindFirstChild("localChar")
+            if lc and lc:IsA("LocalScript") then
+                local env = getsenv(lc)
+                if env then
+                    if type(env.maxEnergy) == "number" then
+                        env.energy = env.maxEnergy
+                    end
+                    if type(env.maxDashes) == "number" then
+                        env.dashes = env.maxDashes
+                    end
+                    if env.dashCD ~= nil then
+                        env.dashCD = 0
+                    end
+                    if type(env.abilityCooldowns) == "table" then
+                        for k in pairs(env.abilityCooldowns) do
+                            env.abilityCooldowns[k] = nil
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+--//===========================================================================
+--// 🎣 PIXEL BLADE AUTO-FISHING ENGINE (الصيد التلقائي بالصنارة)
+--//===========================================================================
+-- Supports:
+-- 1. Auto-equipping Fishing Rod Tool from Backpack + activating Rod Tool
+-- 2. Auto-triggering Fishing ProximityPrompts & Holding E to Cast
+-- 3. Real-time Minigame Detection:
+--    - Green Circle Phase (RGB 39,162,71 / circle_popup -> circle_maxe): Hold E (1.5s first, 1.0s follow-up)
+--    - Blue Reel Phase (RGB 195,223,224 / Reel_10..Reel_1): Rapid E Tap Burst (12x) + Mobile Button Click
+--    - Slider/Bar Minigame Lock (snaps bar/cursor onto fish/target zone)
+--    - Direct Fishing Remote invocation + 15s Cast Timeout Auto-Recast
+
+local FISHING_KEYWORDS = { "fish", "rod", "pole", "cast", "reel", "catch", "bite", "hook", "bobber", "pond", "minigame" }
+
+local function hasFishingKeyword(str)
+    if not str or str == "" then return false end
+    local low = string.lower(tostring(str))
+    for _, kw in ipairs(FISHING_KEYWORDS) do
+        if string.find(low, kw, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+local function pbEquipFishingRod()
+    if not Character then return nil end
+    -- Check if already holding a rod tool
+    for _, child in ipairs(Character:GetChildren()) do
+        if child:IsA("Tool") and hasFishingKeyword(child.Name) then
+            return child
+        end
+    end
+    -- Check Backpack for a rod tool
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack") or LocalPlayer:FindFirstChild("Backpack")
+    if backpack then
+        for _, tool in ipairs(backpack:GetChildren()) do
+            if tool:IsA("Tool") and hasFishingKeyword(tool.Name) then
+                pcall(function()
+                    if Humanoid then
+                        Humanoid:EquipTool(tool)
+                    else
+                        tool.Parent = Character
+                    end
+                end)
+                return tool
+            end
+        end
+    end
+    return Character:FindFirstChildOfClass("Tool")
+end
+
+local function pbFindFishingPrompt()
+    if not HumanoidRootPart then return nil end
+    local myPos = HumanoidRootPart.Position
+    local bestFishPrompt = nil
+    local bestFishDist = math.huge
+    local closestAnyPrompt = nil
+    local closestAnyDist = 18
+
+    for _, desc in ipairs(workspace:GetDescendants()) do
+        if desc:IsA("ProximityPrompt") and desc.Enabled then
+            local part = desc.Parent
+            if part and part:IsA("Model") then
+                part = part.PrimaryPart or part:FindFirstChildWhichIsA("BasePart", true)
+            elseif part and not part:IsA("BasePart") then
+                part = part:FindFirstChildWhichIsA("BasePart", true) or (part.Parent and part.Parent:IsA("BasePart") and part.Parent)
+            end
+            if part and part:IsA("BasePart") then
+                local dist = (part.Position - myPos).Magnitude
+                local isFishRelated = hasFishingKeyword(desc.Name)
+                    or hasFishingKeyword(desc.ActionText)
+                    or hasFishingKeyword(desc.ObjectText)
+                    or (desc.Parent and hasFishingKeyword(desc.Parent.Name))
+
+                if isFishRelated and dist <= 45 and dist < bestFishDist then
+                    bestFishDist = dist
+                    bestFishPrompt = desc
+                elseif dist < closestAnyDist then
+                    closestAnyDist = dist
+                    closestAnyPrompt = desc
+                end
+            end
+        end
+    end
+
+    return bestFishPrompt or closestAnyPrompt
+end
+
+local function pbFireFishingRemotes(stage)
+    local pbRemotes = getPBRemotes()
+    if pbRemotes then
+        for _, rem in ipairs(pbRemotes:GetChildren()) do
+            if hasFishingKeyword(rem.Name) then
+                pcall(function()
+                    if rem:IsA("RemoteEvent") then
+                        if stage == "cast" then
+                            rem:FireServer("Cast")
+                            rem:FireServer(true)
+                        elseif stage == "green" then
+                            rem:FireServer("Hold", true)
+                            rem:FireServer(true)
+                        elseif stage == "reel" then
+                            rem:FireServer("Reel")
+                            rem:FireServer("Catch", true)
+                            rem:FireServer("Complete", 100)
+                            rem:FireServer(true)
+                        end
+                    elseif rem:IsA("RemoteFunction") then
+                        task.spawn(function()
+                            pcall(function()
+                                if stage == "cast" then
+                                    rem:InvokeServer("Cast")
+                                else
+                                    rem:InvokeServer("Catch", true)
+                                    rem:InvokeServer(true)
+                                end
+                            end)
+                        end)
+                    elseif rem:IsA("BindableEvent") then
+                        rem:Fire(true)
+                    end
+                end)
+            end
+        end
+    end
+
+    -- Also check inside equipped Rod Tool for remotes
+    if Character then
+        local tool = Character:FindFirstChildOfClass("Tool")
+        if tool then
+            for _, desc in ipairs(tool:GetDescendants()) do
+                if desc:IsA("RemoteEvent") then
+                    pcall(function()
+                        if stage == "cast" then
+                            desc:FireServer("Cast", true)
+                            desc:FireServer(100, true)
+                        elseif stage == "reel" then
+                            desc:FireServer("Catch", true)
+                            desc:FireServer("Reel", true)
+                            desc:FireServer(100, true)
+                        end
+                    end)
+                end
+            end
+        end
+    end
+end
+
+local function isColorCloseTo(col, tr, tg, tb, tol)
+    if not col then return false end
+    local r = math.floor(col.R * 255 + 0.5)
+    local g = math.floor(col.G * 255 + 0.5)
+    local b = math.floor(col.B * 255 + 0.5)
+    return math.abs(r - tr) <= tol
+        and math.abs(g - tg) <= tol
+        and math.abs(b - tb) <= tol
+end
+
+-- Pixel Blade Fishing UI & Color Detector
+-- Trigger Green: RGB(39, 162, 71)
+-- Trigger Blue:  RGB(195, 223, 224)
+local function pbDetectFishingMinigameState(hubScreenGui)
+    local greenDetected = false
+    local blueDetected = false
+    local mobileFishBtn = nil
+    local fishingGuiActive = false
+
+    local function inspectGuiTree(rootContainer)
+        if not rootContainer then return end
+        for _, obj in ipairs(rootContainer:GetDescendants()) do
+            if obj:IsA("GuiObject") and isGuiVisible(obj) then
+                local objNameLow = string.lower(obj.Name)
+                local parentNameLow = obj.Parent and string.lower(obj.Parent.Name) or ""
+                local inFishingContext = hasFishingKeyword(objNameLow)
+                    or hasFishingKeyword(parentNameLow)
+                    or string.find(objNameLow, "circle", 1, true) ~= nil
+                    or string.find(objNameLow, "reel", 1, true) ~= nil
+                    or string.find(parentNameLow, "circle", 1, true) ~= nil
+                    or string.find(parentNameLow, "minigame", 1, true) ~= nil
+
+                if inFishingContext then
+                    fishingGuiActive = true
+                end
+
+                -- 1. Check Colors (BackgroundColor3, ImageColor3, TextColor3)
+                local colorsToCheck = {}
+                if obj.BackgroundTransparency < 0.95 then
+                    table.insert(colorsToCheck, obj.BackgroundColor3)
+                end
+                if (obj:IsA("ImageLabel") or obj:IsA("ImageButton")) and obj.ImageTransparency < 0.95 then
+                    table.insert(colorsToCheck, obj.ImageColor3)
+                end
+                local stroke = obj:FindFirstChildOfClass("UIStroke")
+                if stroke and stroke.Enabled and stroke.Transparency < 0.95 then
+                    table.insert(colorsToCheck, stroke.Color)
+                end
+
+                for _, col in ipairs(colorsToCheck) do
+                    -- Exact Pixel Blade Green Circle RGB(39, 162, 71)
+                    if isColorCloseTo(col, 39, 162, 71, 26) then
+                        greenDetected = true
+                        fishingGuiActive = true
+                    end
+                    -- Exact Pixel Blade Blue Center Circle RGB(195, 223, 224)
+                    if isColorCloseTo(col, 195, 223, 224, 24) then
+                        blueDetected = true
+                    end
+                    -- If inside a fishing/circle UI, also check dominant green or blue
+                    if inFishingContext then
+                        local r = math.floor(col.R * 255 + 0.5)
+                        local g = math.floor(col.G * 255 + 0.5)
+                        local b = math.floor(col.B * 255 + 0.5)
+                        if g >= 135 and g > (r + 45) and g > (b + 35) then
+                            greenDetected = true
+                        elseif b >= 165 and b > (r + 12) and g >= 140 then
+                            blueDetected = true
+                        end
+                    end
+                end
+
+                -- 2. Check Name / Text cues for Circle Popup / Reel_10..Reel_1
+                if string.find(objNameLow, "circle_popup", 1, true) or string.find(objNameLow, "circle_maxe", 1, true) then
+                    greenDetected = true
+                    fishingGuiActive = true
+                elseif string.find(objNameLow, "reel_", 1, true) or objNameLow == "reel" then
+                    blueDetected = true
+                    fishingGuiActive = true
+                end
+
+                if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+                    local txtLow = string.lower(tostring(obj.Text or ""))
+                    if string.find(txtLow, "hold e", 1, true) or string.find(txtLow, "hold!", 1, true) then
+                        greenDetected = true
+                        fishingGuiActive = true
+                    elseif string.find(txtLow, "tap e", 1, true) or string.find(txtLow, "reel!", 1, true) or string.find(txtLow, "spam", 1, true) or string.find(txtLow, "pull", 1, true) then
+                        blueDetected = true
+                        fishingGuiActive = true
+                    end
+                end
+
+                -- 3. Auto-Align Bar/Cursor if a Bar Minigame exists
+                if inFishingContext and (objNameLow == "bar" or objNameLow == "playerbar" or objNameLow == "cursor" or objNameLow == "catchbar") and obj.Parent then
+                    local targetObj = obj.Parent:FindFirstChild("fish")
+                        or obj.Parent:FindFirstChild("Fish")
+                        or obj.Parent:FindFirstChild("target")
+                        or obj.Parent:FindFirstChild("Target")
+                        or obj.Parent:FindFirstChild("zone")
+                        or obj.Parent:FindFirstChild("sweetspot")
+                    if targetObj and targetObj:IsA("GuiObject") then
+                        pcall(function()
+                            obj.Position = targetObj.Position
+                        end)
+                    end
+                end
+
+                -- 4. Detect Mobile Touch Fishing Button
+                if obj:IsA("GuiButton") and inFishingContext then
+                    mobileFishBtn = obj
+                end
+            end
+        end
+    end
+
+    -- Scan PlayerGui (excluding our own Hub ScreenGui)
+    local ignoreGui = hubScreenGui or State.HubScreenGui
+    for _, gui in ipairs(PlayerGui:GetChildren()) do
+        if gui ~= ignoreGui and gui ~= StealthESPFolder and gui:IsA("LayerCollector") and gui.Enabled then
+            inspectGuiTree(gui)
+        end
+    end
+
+    -- Also scan nearby BillboardGuis in Workspace (e.g. popup above bobber/player)
+    if HumanoidRootPart then
+        local myPos = HumanoidRootPart.Position
+        for _, desc in ipairs(workspace:GetDescendants()) do
+            if desc:IsA("BillboardGui") and desc.Enabled then
+                local adornee = desc.Adornee or desc.Parent
+                if adornee and adornee:IsA("BasePart") and (adornee.Position - myPos).Magnitude <= 45 then
+                    inspectGuiTree(desc)
+                end
+            end
+        end
+    end
+
+    return {
+        green = greenDetected,
+        blue = blueDetected,
+        fishingGuiActive = fishingGuiActive,
+        mobileBtn = mobileFishBtn
+    }
+end
+
+local function pbHoldFishingInput(durationSeconds, mobileBtn, stage)
+    local dur = math.max(0.05, tonumber(durationSeconds) or 1.0)
+    pcall(function()
+        if Config.PB_AutoEquipRod then
+            local rod = pbEquipFishingRod()
+            if rod then
+                pcall(function() rod:Activate() end)
+            end
+        end
+
+        if stage == "cast" and fireproximityprompt then
+            local prompt = pbFindFishingPrompt()
+            if prompt then
+                pcall(function() fireproximityprompt(prompt) end)
+            end
+        end
+
+        pbFireFishingRemotes(stage or "green")
+
+        if VirtualInputManager then
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+        end
+
+        if mobileBtn then
+            pcall(function()
+                if firesignal then
+                    pcall(firesignal, mobileBtn.MouseButton1Down)
+                end
+                activateGuiButton(mobileBtn)
+            end)
+        end
+    end)
+
+    local endTime = tick() + dur
+    while State.Running and Config.PB_AutoFish and tick() < endTime do
+        task.wait(0.02)
+    end
+
+    pcall(function()
+        if VirtualInputManager then
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+        end
+        if mobileBtn and firesignal then
+            pcall(firesignal, mobileBtn.MouseButton1Up)
+        end
+    end)
+end
+
+local function pbTapFishingInput(tapCount, tapInterval, mobileBtn)
+    local count = math.clamp(tonumber(tapCount) or 12, 1, 30)
+    local interval = math.clamp(tonumber(tapInterval) or 0.08, 0.01, 0.5)
+
+    for _ = 1, count do
+        if not State.Running or not Config.PB_AutoFish then
+            break
+        end
+        pcall(function()
+            if VirtualInputManager then
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                task.wait(0.025)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+            end
+            if mobileBtn then
+                activateGuiButton(mobileBtn)
+            end
+            pbFireFishingRemotes("reel")
+        end)
+        task.wait(interval)
+    end
+end
+
 --//===========================================================================
 --// MAIN LOOPS (AOT:R + PIXEL BLADE)
 --//===========================================================================
@@ -1255,6 +1665,10 @@ table.insert(State.Connections, RunService.Heartbeat:Connect(function()
                 end
             end
         end
+    end
+
+    if Config.PB_InfDashAndNoCD then
+        applyPBInfDashAndNoCD()
     end
 
     -- AOT:R Refill Pause
@@ -1533,6 +1947,96 @@ task.spawn(function()
                     end
                 end)
             end
+        end
+    end
+end)
+
+-- 3.5. Pixel Blade Auto-Fishing Loop (الصيد التلقائي بالصنارة: رمي + دائرة خضراء + سحب أزرق)
+task.spawn(function()
+    while State.Running do
+        if Config.PB_AutoFish then
+            pcall(function()
+                -- Step 1: Cast Rod (Equip Rod + Fire Prompt + Hold E)
+                State.PB_FishStatusText = "🎣 جاري رمي الصنارة..."
+                local initState = pbDetectFishingMinigameState(nil)
+                pbHoldFishingInput(Config.PB_FishCastHold, initState.mobileBtn, "cast")
+                State.PB_LastCastTime = tick()
+
+                if not Config.PB_AutoFish then return end
+
+                local firstGreenSeen = false
+                local actionHappened = false
+                local lastGreenTime = 0
+
+                -- Step 2 & 3: Watch for Green Circle(s) and Blue Center Reel
+                while State.Running and Config.PB_AutoFish do
+                    local mgState = pbDetectFishingMinigameState(nil)
+
+                    if Config.PB_AutoFishMinigame then
+                        -- First Green Circle Detected
+                        if not firstGreenSeen and mgState.green then
+                            firstGreenSeen = true
+                            actionHappened = true
+                            lastGreenTime = tick()
+                            State.PB_FishStatusText = "🟢 الدائرة الخضراء الأولى -> ضغط مطول (Hold E)"
+                            pbHoldFishingInput(Config.PB_FishGreenHold, mgState.mobileBtn, "green")
+
+                            -- Wait briefly for green circle to clear (up to 1.0s)
+                            local clearWait = tick() + 1.0
+                            while State.Running and Config.PB_AutoFish and tick() < clearWait do
+                                local st = pbDetectFishingMinigameState(nil)
+                                if not st.green or st.blue then break end
+                                task.wait(0.02)
+                            end
+
+                        -- Blue Center Reel Detected (after green or directly in fishing UI)
+                        elseif (firstGreenSeen or mgState.fishingGuiActive) and mgState.blue and not mgState.green then
+                            actionHappened = true
+                            State.PB_FishStatusText = "🔵 الدائرة الزرقاء -> نقر سريع للسحب (Reel Tap)"
+                            pbTapFishingInput(Config.PB_FishTapCount, Config.PB_FishTapInterval, mgState.mobileBtn)
+                            State.PB_FishCaughtCount = State.PB_FishCaughtCount + 1
+                            State.PB_FishStatusText = "✅ تم سحب السمكة! (#" .. tostring(State.PB_FishCaughtCount) .. ") انتظار..."
+
+                            -- Post-tap wait before next cast
+                            local postEnd = tick() + (tonumber(Config.PB_FishPostWait) or 1.8)
+                            while State.Running and Config.PB_AutoFish and tick() < postEnd do
+                                task.wait(0.05)
+                            end
+                            break
+
+                        -- Follow-up Green Circle Detected
+                        elseif firstGreenSeen and mgState.green then
+                            actionHappened = true
+                            lastGreenTime = tick()
+                            State.PB_FishStatusText = "🟢 دائرة خضراء إضافية -> ضغط مطول (Follow-up Hold E)"
+                            pbHoldFishingInput(Config.PB_FishFollowGreenHold, mgState.mobileBtn, "green")
+
+                            local clearWait = tick() + 1.0
+                            while State.Running and Config.PB_AutoFish and tick() < clearWait do
+                                local st = pbDetectFishingMinigameState(nil)
+                                if not st.green or st.blue then break end
+                                task.wait(0.02)
+                            end
+                        end
+                    end
+
+                    -- Timeout Guard: If no action within PB_FishTimeout seconds (or 6s after green with no blue), force burst & recast
+                    local elapsedSinceCast = tick() - State.PB_LastCastTime
+                    local timeoutSec = tonumber(Config.PB_FishTimeout) or 15
+                    if (not actionHappened and elapsedSinceCast >= timeoutSec)
+                        or (firstGreenSeen and (tick() - lastGreenTime) >= 6.0) then
+                        State.PB_FishStatusText = "⏱️ انتهت المهلة -> إعادة رمي الصنارة تلقائياً..."
+                        pbTapFishingInput(math.min(10, Config.PB_FishTapCount), 0.02, mgState.mobileBtn)
+                        task.wait(0.25)
+                        break
+                    end
+
+                    task.wait(0.025)
+                end
+            end)
+        else
+            State.PB_FishStatusText = "متوقف (Idle)"
+            task.wait(0.35)
         end
     end
 end)
@@ -1937,6 +2441,7 @@ ScreenGui.Name = randomIdentifier(16)
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = getSafeGuiParent()
+State.HubScreenGui = ScreenGui
 
 local FloatButton = Instance.new("TextButton")
 FloatButton.Name = randomIdentifier(10)
@@ -2326,12 +2831,13 @@ end
 --//===========================================================================
 
 local TabPBFarm = createTab("🗡️ Pixel Blade قتال", 1)
-local TabPBLoot = createTab("🎁 Pixel صناديق وبوابات", 2)
-local TabFarm = createTab("⚔️ AOT:R الفارم", 3)
-local TabCombat = createTab("⚡ AOT:R المساعدات", 4)
-local TabMisc = createTab("🎲 AOT:R العائلات", 5)
-local TabSecurity = createTab("🛡️ الحماية (Anti-Ban)", 6)
-local TabESP = createTab("👁️ الرادار والفريمات", 7)
+local TabPBFish = createTab("🎣 Pixel صيد بالصنارة", 2)
+local TabPBLoot = createTab("🎁 Pixel صناديق وبوابات", 3)
+local TabFarm = createTab("⚔️ AOT:R الفارم", 4)
+local TabCombat = createTab("⚡ AOT:R المساعدات", 5)
+local TabMisc = createTab("🎲 AOT:R العائلات", 6)
+local TabSecurity = createTab("🛡️ الحماية (Anti-Ban)", 7)
+local TabESP = createTab("👁️ الرادار والفريمات", 8)
 
 -- Automatically open the detected game's main tab first!
 if CurrentGame == "PixelBlade" then
@@ -2375,6 +2881,10 @@ addToggle(TabPBFarm, "تقوية الضرر الخارق + شفاء تلقائي
     end
 end)
 
+addToggle(TabPBFarm, "داش لا نهائي وإلغاء انتظار المهارات (Inf Dash & No CD)", Config.PB_InfDashAndNoCD, function(val)
+    Config.PB_InfDashAndNoCD = val
+end)
+
 addToggle(TabPBFarm, "تكسير الصناديق/الأغراض تلقائياً (Auto Breakables)", Config.PB_AutoBreakables, function(val)
     Config.PB_AutoBreakables = val
 end)
@@ -2387,6 +2897,111 @@ end)
 
 addStepper(TabPBFarm, "حجم هيت بوكس الأعداء", 5, 80, 5, Config.PB_HitboxSize, function(val)
     Config.PB_HitboxSize = val
+end)
+
+-- ============================================================================
+-- [PIXEL BLADE TAB 2: 🎣 AUTO FISHING (الصيد التلقائي بالصنارة)]
+-- ============================================================================
+addSectionHeader(TabPBFish, "🎣 الصيد التلقائي بالصنارة في Pixel Blade")
+
+local FishStatusBox = Instance.new("TextLabel")
+FishStatusBox.Size = UDim2.new(1, 0, 0, 36)
+FishStatusBox.BackgroundColor3 = Color3.fromRGB(26, 36, 48)
+FishStatusBox.Text = "🎣 الحالة: متوقف | الأسماك المصطادة: 0"
+FishStatusBox.TextColor3 = Color3.fromRGB(110, 235, 255)
+FishStatusBox.Font = Enum.Font.GothamBold
+FishStatusBox.TextSize = 11
+FishStatusBox.TextWrapped = true
+FishStatusBox.Parent = TabPBFish
+
+local fishStatusCorner = Instance.new("UICorner")
+fishStatusCorner.CornerRadius = UDim.new(0, 6)
+fishStatusCorner.Parent = FishStatusBox
+
+task.spawn(function()
+    while State.Running do
+        task.wait(0.25)
+        if FishStatusBox and FishStatusBox.Parent then
+            FishStatusBox.Text = string.format(
+                "🎣 الحالة: %s | 🐟 تم صيد: %d",
+                tostring(State.PB_FishStatusText or "متوقف"),
+                tonumber(State.PB_FishCaughtCount) or 0
+            )
+        end
+    end
+end)
+
+addToggle(TabPBFish, "تفعيل الصيد التلقائي بالصنارة (Auto Fish On/Off)", Config.PB_AutoFish, function(val)
+    Config.PB_AutoFish = val
+    if not val and VirtualInputManager then
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+        end)
+    end
+end)
+
+addToggle(TabPBFish, "تجهيز الصنارة والتفاعل مع نقطة الصيد تلقائياً", Config.PB_AutoEquipRod, function(val)
+    Config.PB_AutoEquipRod = val
+end)
+
+addToggle(TabPBFish, "حل ميني جيم الصيد تلقائياً (دائرة خضراء + سحب أزرق)", Config.PB_AutoFishMinigame, function(val)
+    Config.PB_AutoFishMinigame = val
+end)
+
+addSectionHeader(TabPBFish, "⏱️ إعدادات توقيت الصيد والميني جيم (Timings)")
+
+addStepper(TabPBFish, "مدة ضغط رمي الصنارة بالثواني (Cast Hold E)", 0.2, 3.0, 0.1, Config.PB_FishCastHold, function(val)
+    Config.PB_FishCastHold = val
+end)
+
+addStepper(TabPBFish, "مدة ضغط الدائرة الخضراء الأولى (First Green Hold)", 0.3, 3.0, 0.1, Config.PB_FishGreenHold, function(val)
+    Config.PB_FishGreenHold = val
+end)
+
+addStepper(TabPBFish, "مدة ضغط الدوائر الخضراء التالية (Follow-up Hold)", 0.2, 3.0, 0.1, Config.PB_FishFollowGreenHold, function(val)
+    Config.PB_FishFollowGreenHold = val
+end)
+
+addStepper(TabPBFish, "عدد النقرات السريعة عند الدائرة الزرقاء (Blue Taps)", 5, 25, 1, Config.PB_FishTapCount, function(val)
+    Config.PB_FishTapCount = val
+end)
+
+addStepper(TabPBFish, "مهلة إعادة الرمي التلقائي بالثواني (Timeout)", 8, 30, 1, Config.PB_FishTimeout, function(val)
+    Config.PB_FishTimeout = val
+end)
+
+addActionButton(TabPBFish, "🎣 رمي الصنارة الآن يدوياً (Cast Rod Once)", function()
+    task.spawn(function()
+        local st = pbDetectFishingMinigameState(State.HubScreenGui)
+        pbHoldFishingInput(Config.PB_FishCastHold, st.mobileBtn, "cast")
+    end)
+end)
+
+addActionButton(TabPBFish, "🔍 فحص واجهة وريموتات الصيد القريبة (Scan Fishing)", function()
+    pcall(function()
+        local foundList = {}
+        local pbRem = getPBRemotes()
+        if pbRem then
+            for _, r in ipairs(pbRem:GetChildren()) do
+                if hasFishingKeyword(r.Name) then
+                    table.insert(foundList, "Remote:" .. r.Name)
+                end
+            end
+        end
+        local pr = pbFindFishingPrompt()
+        if pr then
+            table.insert(foundList, "Prompt:" .. tostring(pr.ActionText ~= "" and pr.ActionText or pr.Name))
+        end
+        local rod = pbEquipFishingRod()
+        if rod then
+            table.insert(foundList, "Tool:" .. rod.Name)
+        end
+        if #foundList > 0 then
+            State.PB_FishStatusText = "✅ تم كشف: " .. table.concat(foundList, " | ")
+        else
+            State.PB_FishStatusText = "ℹ️ قف بجانب الماء/نقطة الصيد ثم فعّل الصيد التلقائي"
+        end
+    end)
 end)
 
 -- ============================================================================
@@ -2647,9 +3262,15 @@ addActionButton(TabSecurity, "🚨 زر الطوارئ: إيقاف كل التف
     Config.PB_AutoFarmDungeon = false
     Config.PB_AutoFarmRaid = false
     Config.PB_KillAura = false
+    Config.PB_AutoFish = false
     State.IsTSHovering = false
     State.TSHoverPos = nil
     saveConfig()
+    pcall(function()
+        if VirtualInputManager then
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+        end
+    end)
     pcall(updateAllNapes)
     pcall(clearESP)
     if HumanoidRootPart then
@@ -2744,7 +3365,11 @@ local function cleanupScript()
     Config.PB_AutoFarmDungeon = false
     Config.PB_AutoFarmRaid = false
     Config.PB_KillAura = false
+    Config.PB_AutoFish = false
     pcall(function()
+        if VirtualInputManager then
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+        end
         if HumanoidRootPart then HumanoidRootPart.Anchored = false end
     end)
     pcall(updateAllNapes)
