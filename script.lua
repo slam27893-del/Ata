@@ -1,6 +1,6 @@
 --[[
     ============================================================================
-    ⚔️ Attack on Titan: Revolution (AOT:R) - Delta Hub [PROTECTED v2.0]
+    ⚔️ Attack on Titan: Revolution (AOT:R) - Delta Hub [PROTECTED v2.1]
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -171,14 +171,13 @@ local Config = {
 
     -- Main Menu Family Roll & Webhook
     AutoRollFamily = false,
-    StopOnRareFamily = true, -- Stops on Yeager / Ackerman / Reiss
+    StopOnRareFamily = true, -- Stops on Yeager / Ackerman / Reiss / Fritz / Helos
     RollInterval = 0.5,
     WebhookURL = "",
     WebhookEnabled = false,
     WebhookShowUsername = false
 }
 
--- Save Config to Delta workspace file + getgenv
 local function saveConfig()
     if getgenv then
         getgenv().AOTR_SavedConfig = Config
@@ -190,7 +189,6 @@ local function saveConfig()
     end
 end
 
--- Load Config from Delta workspace file or getgenv
 local function loadSavedConfig()
     local loadedTable = nil
     if isfile and readfile then
@@ -223,7 +221,6 @@ end
 
 loadSavedConfig()
 
--- Register Queue On Teleport so the script auto-runs in the next Raid/Mission with saved Config
 local TeleportQueued = false
 local function setupAutoExecuteOnTeleport()
     if TeleportQueued or not Config.AutoExecuteOnTeleport then return end
@@ -255,6 +252,10 @@ end)
 local State = {
     Running = true,
     CanSlash = true,
+    IsRefilling = false,
+    FailedBladeReloadCount = 0,
+    CachedRefillParts = nil,
+    LastRefillScan = 0,
     FarmStartTimestamp = tick(),
     MissionStartTimestamp = tick(),
     MissionHasTitans = false,
@@ -414,7 +415,7 @@ end
 table.insert(State.Connections, Players.PlayerAdded:Connect(checkPlayerSecurity))
 
 --//===========================================================================
---// 🛡️ LAYER 4: ACCURATE MISSION TIMER GUARD (FIX #2: FINISHES RIGHT AFTER 20s)
+--// 🛡️ LAYER 4: ACCURATE MISSION TIMER GUARD (FINISHES RIGHT AFTER 20s)
 --//===========================================================================
 
 local function countAliveTitans()
@@ -430,7 +431,6 @@ local function countAliveTitans()
     return alive
 end
 
--- Pure real-time mission tracker (Never gets stuck on "0:00" HUD labels!)
 local function getMissionElapsedSeconds()
     return tick() - State.MissionStartTimestamp
 end
@@ -442,15 +442,12 @@ local function isSafeToKillTitan()
     local aliveCount = countAliveTitans()
     local elapsed = getMissionElapsedSeconds()
 
-    -- Kill all titans freely except the VERY LAST 1 Titan if mission time is still under 20s.
-    -- Once elapsed >= MinSafeMissionSeconds (e.g. 20s), immediately kill the last Titan and finish!
     if aliveCount <= 1 and elapsed < Config.MinSafeMissionSeconds then
         return false
     end
     return true
 end
 
--- Detect when a new mission wave begins
 task.spawn(function()
     while State.Running do
         task.wait(0.5)
@@ -460,7 +457,6 @@ task.spawn(function()
             State.MissionStartTimestamp = tick()
             State.NotifiedNapes = {}
         elseif alive == 0 and State.MissionHasTitans then
-            -- Check if Rewards screen is visible to reset for next retry
             local interface = PlayerGui:FindFirstChild("Interface")
             local rewards = interface and interface:FindFirstChild("Rewards")
             if rewards and rewards.Visible then
@@ -471,7 +467,7 @@ task.spawn(function()
 end)
 
 --//===========================================================================
---// UI & MULTI-METHOD BUTTON CLICKER (FIX #1: WORKS ON ALL AOT:R BUTTONS)
+--// UI & MULTI-METHOD BUTTON CLICKER
 --//===========================================================================
 
 local function makeDraggable(dragTrigger, targetFrame)
@@ -529,12 +525,10 @@ local function isGuiVisible(obj)
     return true
 end
 
--- Comprehensive AOT:R Button Clicker (Combines Firesignal + GuiService Navigation + VIM Multi-Offset)
 local function smartClickButton(btn, offsetX, offsetY)
     if not btn then return false end
     local clicked = false
 
-    -- Method 1: Executor firesignal on button events
     pcall(function()
         if firesignal then
             if btn:IsA("GuiButton") then
@@ -548,13 +542,13 @@ local function smartClickButton(btn, offsetX, offsetY)
         end
     end)
 
-    -- Method 2: GuiService.SelectedObject + Return Key (Used by ZeldHub/AOT:R scripts, resolution-independent)
     pcall(function()
         if VirtualInputManager and btn:IsA("GuiObject") then
+            btn.Selectable = true
             GuiService.SelectedObject = btn
-            task.wait(0.02)
+            task.wait(0.03)
             VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
-            task.wait(0.02)
+            task.wait(0.03)
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
             task.wait(0.02)
             GuiService.SelectedObject = nil
@@ -562,7 +556,6 @@ local function smartClickButton(btn, offsetX, offsetY)
         end
     end)
 
-    -- Method 3: VirtualInputManager Mouse/Touch Coordinate Click
     pcall(function()
         if VirtualInputManager and btn:IsA("GuiObject") then
             local pos = btn.AbsolutePosition
@@ -784,50 +777,97 @@ local function updateAllNapes()
 end
 
 --//===========================================================================
---// 🔧 FIX #3: ROBUST AUTO-REFILL & AUTO-RELOAD BLADES/SPEARS/GAS
+--// 🔧 UTGARD + ALL-MAPS REFILL & BLADE RELOAD SYSTEM (v2.1 FIX)
 --//===========================================================================
 
-local function findRefillObject()
-    local unclimbable = workspace:FindFirstChild("Unclimbable")
-    local reloads = unclimbable and unclimbable:FindFirstChild("Reloads")
-    if reloads then
-        -- Direct children check first
-        for _, obj in ipairs(reloads:GetChildren()) do
-            local r = obj:FindFirstChild("Refill")
-            if r then return r end
-            if obj.Name == "Refill" then return obj end
-        end
-        -- Deep recursive search inside Reloads (e.g. GasTanks.Refill)
-        local deepRefill = reloads:FindFirstChild("Refill", true)
-        if deepRefill then return deepRefill end
-    end
-    -- Fallback search in Unclimbable or Workspace
-    if unclimbable then
-        local uRefill = unclimbable:FindFirstChild("Refill", true)
-        if uRefill then return uRefill end
-    end
-    return nil
-end
+-- Scans entire Workspace for all BaseParts named "Refill" (Critical for Utgard map!)
+local function getAllWorkspaceRefills()
+    if not State.CachedRefillParts or (#State.CachedRefillParts == 0 and (os.clock() - State.LastRefillScan) > 8) then
+        State.LastRefillScan = os.clock()
+        State.CachedRefillParts = {}
 
-local function areHandBladesBroken()
-    local broken = false
-    pcall(function()
-        local charsFolder = workspace:FindFirstChild("Characters")
-        local myCharModel = (charsFolder and charsFolder:FindFirstChild(LocalPlayer.Name)) or Character
-        if myCharModel then
-            local rig = myCharModel:FindFirstChild("Rig_" .. LocalPlayer.Name) or myCharModel:FindFirstChildWhichIsA("Model")
-            if rig then
-                local lh = rig:FindFirstChild("LeftHand")
-                local rh = rig:FindFirstChild("RightHand")
-                local bLeft = lh and lh:FindFirstChild("Blade_1")
-                local bRight = rh and rh:FindFirstChild("Blade_1")
-                if (bLeft and bLeft.Transparency >= 0.95) or (bRight and bRight.Transparency >= 0.95) then
-                    broken = true
+        -- 1. Check Unclimbable.Reloads first
+        local unclimbable = workspace:FindFirstChild("Unclimbable")
+        local reloads = unclimbable and unclimbable:FindFirstChild("Reloads")
+        if reloads then
+            for _, desc in ipairs(reloads:GetDescendants()) do
+                if desc.Name == "Refill" and desc:IsA("BasePart") then
+                    table.insert(State.CachedRefillParts, desc)
                 end
             end
         end
-    end)
-    return broken
+
+        -- 2. Full Workspace scan (Finds Refill barrels/stations in Utgard, Docks, Stohess, etc.)
+        for _, desc in ipairs(workspace:GetDescendants()) do
+            if desc.Name == "Refill" and desc:IsA("BasePart") then
+                if not table.find(State.CachedRefillParts, desc) then
+                    table.insert(State.CachedRefillParts, desc)
+                end
+            end
+        end
+    end
+    return State.CachedRefillParts
+end
+
+workspace:GetAttributeChangedSignal("Type"):Connect(function()
+    State.CachedRefillParts = nil
+end)
+
+-- Returns the closest Refill BasePart to the player in any map (including Utgard)
+local function findClosestRefillPart()
+    local rootPos = HumanoidRootPart and HumanoidRootPart.Position
+    local closest = nil
+    local minDist = math.huge
+
+    for _, part in ipairs(getAllWorkspaceRefills()) do
+        if part and part:IsDescendantOf(workspace) then
+            if not rootPos then
+                return part
+            end
+            local d = (part.Position - rootPos).Magnitude
+            if d < minDist then
+                minDist = d
+                closest = part
+            end
+        end
+    end
+
+    return closest
+end
+
+-- Gets the player's active Blade_1 part in hand
+local function getActiveHandBlade()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    local rig = char:FindFirstChild("Rig_" .. LocalPlayer.Name)
+    if not rig then
+        local charsFolder = workspace:FindFirstChild("Characters")
+        local charInFolder = charsFolder and charsFolder:FindFirstChild(LocalPlayer.Name)
+        rig = charInFolder and charInFolder:FindFirstChild("Rig_" .. LocalPlayer.Name)
+    end
+    local leftHand = rig and rig:FindFirstChild("LeftHand")
+    return leftHand and leftHand:FindFirstChild("Blade_1")
+end
+
+local function areHandBladesBroken()
+    local blade = getActiveHandBlade()
+    if blade and blade.Transparency >= 0.95 then
+        return true
+    end
+    return false
+end
+
+-- Parses Sets text reliably even when RichText (<font>) tags are present
+local function parseRichTextNumber(label)
+    if not label then return nil end
+    local ok, text = pcall(function() return label.ContentText end)
+    if not ok or not text or text == "" then
+        ok, text = pcall(function() return label.Text end)
+    end
+    if not ok or not text then return nil end
+    text = string.gsub(tostring(text), "<[^>]+>", "")
+    local firstNum = string.match(text, "%d+")
+    return tonumber(firstNum)
 end
 
 local function getWeaponStatus()
@@ -844,30 +884,34 @@ local function getWeaponStatus()
     local main = hud and hud:FindFirstChild("Main")
     local top = main and main:FindFirstChild("Top")
 
-    if interface then
-        -- Find Sets TextLabel anywhere under Top or Interface (Works for both "Blades" and "Blade")
-        local setsLabel = (top and top:FindFirstChild("Sets", true)) or interface:FindFirstChild("Sets", true)
-        if setsLabel and setsLabel:IsA("TextLabel") then
-            local currentSets = tonumber(setsLabel.Text:match("(%d+)%s*/") or setsLabel.Text:match("^(%d+)"))
-            if currentSets ~= nil then
-                setsCount = currentSets
-                bladesEmpty = (currentSets == 0)
-            end
-        end
-
-        -- Check Blade Durability Bar Gradient
-        local bladesFrame = top and (top:FindFirstChild("Blades") or top:FindFirstChild("Blade"))
-        if bladesFrame then
-            local grad = bladesFrame:FindFirstChild("Gradient", true)
-            if grad and grad:IsA("UIGradient") then
-                if grad.Offset.X <= -0.14 then
-                    bladeBarDepleted = true
+    if top then
+        -- Find Blade/Blades frame (Even if nested inside a sub-child of Top)
+        local bladeFrame = top:FindFirstChild("Blades") or top:FindFirstChild("Blade")
+        if not bladeFrame then
+            for _, child in ipairs(top:GetChildren()) do
+                local bf = child:FindFirstChild("Blades") or child:FindFirstChild("Blade")
+                if bf then
+                    bladeFrame = bf
+                    break
                 end
             end
         end
 
-        -- Check Gas Bar Gradient if present
-        local gasFrame = top and top:FindFirstChild("Gas")
+        local setsLabel = (bladeFrame and bladeFrame:FindFirstChild("Sets", true)) or top:FindFirstChild("Sets", true)
+        local parsedSets = parseRichTextNumber(setsLabel)
+        if parsedSets ~= nil then
+            setsCount = parsedSets
+            bladesEmpty = (parsedSets == 0)
+        end
+
+        if bladeFrame then
+            local grad = bladeFrame:FindFirstChild("Gradient", true)
+            if grad and grad:IsA("UIGradient") and grad.Offset.X <= -0.14 then
+                bladeBarDepleted = true
+            end
+        end
+
+        local gasFrame = top:FindFirstChild("Gas", true)
         if gasFrame then
             local gasGrad = gasFrame:FindFirstChild("Gradient", true)
             if gasGrad and gasGrad:IsA("UIGradient") and gasGrad.Offset.X <= -0.25 then
@@ -875,16 +919,13 @@ local function getWeaponStatus()
             end
         end
 
-        -- Check Spears count
-        local spearsFrame = top and top:FindFirstChild("Spears")
-        local spearLabel = (spearsFrame and spearsFrame:FindFirstChild("Spears", true)) or interface:FindFirstChild("Spears", true)
-        if spearLabel and spearLabel:IsA("TextLabel") then
-            local c = tonumber(spearLabel.Text:match("(%d+)%s*/") or spearLabel.Text:match("^(%d+)"))
-            if c ~= nil then
-                spearSlotCount = tostring(c)
-                hasSpearAmmo = (c > 0)
-                spearsEmpty = (c == 0)
-            end
+        local spearsFrame = top:FindFirstChild("Spears", true)
+        local spearLabel = (spearsFrame and spearsFrame:FindFirstChild("Spears", true)) or (interface and interface:FindFirstChild("Spears", true))
+        local parsedSpears = parseRichTextNumber(spearLabel)
+        if parsedSpears ~= nil then
+            spearSlotCount = tostring(parsedSpears)
+            hasSpearAmmo = (parsedSpears > 0)
+            spearsEmpty = (parsedSpears == 0)
         end
     end
 
@@ -899,33 +940,94 @@ local function getWeaponStatus()
     }
 end
 
--- Execute a complete Refill + Blade Reload cycle
-local function performRefillNow(forceStationRefill)
+-- Full Teleport-to-Station Refill Sequence (Works in Utgard & All Maps!)
+local function executeFullStationRefill()
+    if State.IsRefilling then return end
     refreshRemotes()
-    local refillObj = findRefillObject()
-    if refillObj and Remotes.POST then
+
+    local refillPart = findClosestRefillPart()
+    if not refillPart then
+        State.CachedRefillParts = nil
+        refillPart = findClosestRefillPart()
+    end
+    if not refillPart or not HumanoidRootPart then return end
+
+    State.IsRefilling = true
+
+    pcall(function()
+        local targetCFrame = CFrame.new(refillPart.Position + Vector3.new(0, 3, 0))
+        HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+        HumanoidRootPart.CFrame = targetCFrame
+        HumanoidRootPart.Anchored = true
+    end)
+
+    task.wait(0.25)
+
+    -- 1. Fire ProximityPrompt on the Refill part/model (Used in Utgard & station prompts)
+    pcall(function()
+        if fireproximityprompt then
+            local prompt = refillPart:FindFirstChildOfClass("ProximityPrompt")
+                or (refillPart.Parent and refillPart.Parent:FindFirstChildOfClass("ProximityPrompt"))
+                or (refillPart.Parent and refillPart.Parent.Parent and refillPart.Parent.Parent:FindFirstChildOfClass("ProximityPrompt"))
+            if prompt then
+                fireproximityprompt(prompt)
+            end
+        end
+    end)
+
+    -- 2. Fire both POST and GET Reload remotes + Gas Supply remote + R key
+    for _ = 1, 3 do
         pcall(function()
-            Remotes.POST:FireServer("Attacks", "Reload", refillObj)
+            if HumanoidRootPart and refillPart then
+                HumanoidRootPart.CFrame = CFrame.new(refillPart.Position + Vector3.new(0, 3, 0))
+            end
+            if Remotes.POST then
+                Remotes.POST:FireServer("Attacks", "Reload", refillPart)
+                Remotes.POST:FireServer("Stats", "Gas_Supply", 1)
+            end
+            if Remotes.GET then
+                task.spawn(function()
+                    pcall(function()
+                        Remotes.GET:InvokeServer("Attacks", "Reload", refillPart)
+                    end)
+                end)
+            end
+            if VirtualInputManager then
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.R, false, game)
+                task.wait(0.05)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+            end
+        end)
+        task.wait(0.35)
+    end
+
+    -- Wait briefly for station refill channel to complete, then draw fresh blades
+    task.wait(1.2)
+
+    if Remotes.GET then
+        pcall(function()
+            Remotes.GET:InvokeServer("Blades", "Reload")
         end)
     end
-    if Remotes.GET and (forceStationRefill or Config.AutoReloadBlades) then
-        task.delay(0.15, function()
-            pcall(function()
-                Remotes.GET:InvokeServer("Blades", "Reload")
-            end)
-        end)
-    end
+
+    pcall(function()
+        if HumanoidRootPart then
+            HumanoidRootPart.Anchored = false
+        end
+    end)
+
+    State.FailedBladeReloadCount = 0
+    State.IsRefilling = false
 end
 
 --//===========================================================================
---// 🔧 FIX #1: FAMILY ROLL FINDER & CLICKER (MAIN MENU)
+--// FAMILY ROLL FINDER, REMOTE & CLICKER (MAIN MENU)
 --//===========================================================================
 
 local function findFamilyRollButton()
     local interface = PlayerGui:FindFirstChild("Interface")
     if not interface then return nil end
 
-    -- Path 1: Exact path in AOT:R (Interface.Customisation.Family.Buttons_2.Roll)
     local custom = interface:FindFirstChild("Customisation")
     local family = custom and custom:FindFirstChild("Family")
     if family then
@@ -939,7 +1041,6 @@ local function findFamilyRollButton()
         end
     end
 
-    -- Path 2: Recursive fallback search across Interface for any Roll button
     for _, desc in ipairs(interface:GetDescendants()) do
         if desc:IsA("GuiButton") then
             if desc.Name == "Roll" or desc.Name == "RollButton" then
@@ -969,10 +1070,13 @@ local function getCurrentFamilyName()
 end
 
 local function isRareFamily(familyText)
-    if familyText == "" then return false end
-    return string.find(familyText, "YEAGER") ~= nil
-        or string.find(familyText, "ACKERMAN") ~= nil
-        or string.find(familyText, "REISS") ~= nil
+    if not familyText or familyText == "" then return false end
+    local up = string.upper(tostring(familyText))
+    return string.find(up, "YEAGER") ~= nil
+        or string.find(up, "ACKERMAN") ~= nil
+        or string.find(up, "REISS") ~= nil
+        or string.find(up, "FRITZ") ~= nil
+        or string.find(up, "HELOS") ~= nil
 end
 
 --//===========================================================================
@@ -982,6 +1086,11 @@ end
 -- 1. Heartbeat Loop (Auto Kill Blades + Hover + Anti-Fling)
 table.insert(State.Connections, RunService.Heartbeat:Connect(function()
     if not State.Running or not HumanoidRootPart then return end
+
+    -- Pause movement overrides while teleported to Refill Station
+    if State.IsRefilling then
+        return
+    end
 
     if Config.VelocityAntiFling then
         if HumanoidRootPart.AssemblyLinearVelocity.Magnitude > 650 then
@@ -1022,7 +1131,6 @@ table.insert(State.Connections, RunService.Heartbeat:Connect(function()
             HumanoidRootPart.CFrame = CFrame.new(targetPos)
         end
 
-        -- 🛡️ Check 20-second Mission Timer Guard (Holds fire ONLY on the last titan until 20s pass, then kills it immediately!)
         if not isSafeToKillTitan() then
             return
         end
@@ -1059,7 +1167,7 @@ end))
 task.spawn(function()
     local firstLaunch = true
     while State.Running do
-        if Config.AutoFarmTS and HumanoidRootPart then
+        if Config.AutoFarmTS and HumanoidRootPart and not State.IsRefilling then
             refreshRemotes()
             local debrisFolder = workspace:FindFirstChild("Debris")
             if debrisFolder and debrisFolder:FindFirstChild("Roar") then
@@ -1122,7 +1230,7 @@ task.spawn(function()
     end
 end)
 
--- 3. Combat Automation Loop (Fixed Auto Refill + Auto Reload Blades + Auto Escape + Titan Ripper)
+-- 3. Combat Automation Loop (Utgard + All-Maps Auto Refill, Auto Reload Blades, Auto Escape, Titan Ripper)
 task.spawn(function()
     local skillCooldowns = {
         ["14"] = { last = 0, cd = 5 },
@@ -1149,24 +1257,57 @@ task.spawn(function()
         local status = getWeaponStatus()
         local now = tick()
 
-        -- Auto Refill at Refill Station (Continues firing every 0.4s whenever empty or low until refilled!)
-        if Config.AutoRefill and Remotes.POST then
-            local needsRefill = status.bladesEmpty
-                or status.spearsEmpty
-                or status.gasLow
-                or (status.setsCount == 0)
-                or (status.bladeBarDepleted and status.setsCount <= 1)
-
-            if needsRefill and (now - State.LastRefillFire) >= 0.4 then
-                local refillObj = findRefillObject()
-                if refillObj then
-                    State.LastRefillFire = now
+        -- Step A: Auto Reload Blades from Sheath when hand blades break
+        if (Config.AutoReloadBlades or Config.AutoRefill) and status.bladeBarDepleted and not status.bladesEmpty and not State.IsRefilling then
+            if (now - State.LastReloadFire) >= 0.45 then
+                State.LastReloadFire = now
+                if Remotes.GET then
                     pcall(function()
-                        Remotes.POST:FireServer("Attacks", "Reload", refillObj)
+                        Remotes.GET:InvokeServer("Blades", "Reload")
                     end)
-                    -- Also equip new blades after station refill if current blades are broken
-                    if status.bladeBarDepleted and Remotes.GET then
-                        task.delay(0.15, function()
+                end
+                task.wait(0.25)
+                if areHandBladesBroken() then
+                    -- Even after invoking Blades Reload, blade is still broken -> sheaths are actually 0/3 on server!
+                    State.FailedBladeReloadCount = State.FailedBladeReloadCount + 1
+                else
+                    State.FailedBladeReloadCount = 0
+                end
+            end
+        elseif not status.bladeBarDepleted then
+            State.FailedBladeReloadCount = 0
+        end
+
+        -- Step B: Auto Refill at Refill Station (Utgard + All Maps)
+        -- Triggers if Sets == 0, Spears == 0, Gas is low, OR if Blades Reload failed >= 2 times (meaning sheaths are empty on server!)
+        if Config.AutoRefill and not State.IsRefilling then
+            local emptySheaths = status.bladesEmpty or (status.setsCount == 0) or (State.FailedBladeReloadCount >= 2)
+            local needsStationRefill = emptySheaths or status.spearsEmpty or status.gasLow
+
+            if needsStationRefill and (now - State.LastRefillFire) >= 0.6 then
+                State.LastRefillFire = now
+                local refillPart = findClosestRefillPart()
+                if refillPart then
+                    -- First try remote-only quick refill
+                    if Remotes.POST then
+                        pcall(function()
+                            Remotes.POST:FireServer("Attacks", "Reload", refillPart)
+                            Remotes.POST:FireServer("Stats", "Gas_Supply", 1)
+                        end)
+                    end
+                    if Remotes.GET then
+                        task.spawn(function()
+                            pcall(function()
+                                Remotes.GET:InvokeServer("Attacks", "Reload", refillPart)
+                            end)
+                        end)
+                    end
+
+                    -- If blades are completely broken in hand and sheaths are empty (e.g. Utgard), teleport to the Refill part & complete station refill!
+                    if (emptySheaths and status.bladeBarDepleted) or State.FailedBladeReloadCount >= 2 then
+                        executeFullStationRefill()
+                    elseif status.bladeBarDepleted and Remotes.GET then
+                        task.delay(0.2, function()
                             pcall(function()
                                 Remotes.GET:InvokeServer("Blades", "Reload")
                             end)
@@ -1176,17 +1317,7 @@ task.spawn(function()
             end
         end
 
-        -- Auto Reload Blades (When current blade durability drops or hand blades break)
-        if Config.AutoReloadBlades and status.bladeBarDepleted and (now - State.LastReloadFire) >= 0.35 then
-            State.LastReloadFire = now
-            if Remotes.GET then
-                pcall(function()
-                    Remotes.GET:InvokeServer("Blades", "Reload")
-                end)
-            end
-        end
-
-        -- Auto Escape Grab
+        -- Step C: Auto Escape Grab
         if Config.AutoEscapeGrab and Remotes.POST then
             local interface = PlayerGui:FindFirstChild("Interface")
             local buttons = interface and interface:FindFirstChild("Buttons")
@@ -1203,8 +1334,8 @@ task.spawn(function()
             end
         end
 
-        -- Titan Ripper Auto Skills
-        if Config.TitanRipper and Remotes.GET and isSafeToKillTitan() then
+        -- Step D: Titan Ripper Auto Skills
+        if Config.TitanRipper and Remotes.GET and isSafeToKillTitan() and not State.IsRefilling then
             for skillId, info in pairs(skillCooldowns) do
                 if (now - info.last) >= info.cd then
                     info.last = now
@@ -1219,7 +1350,7 @@ task.spawn(function()
     end
 end)
 
--- 4. Mission & Menu UI Automation Loop (Auto Retry, Skip Cutscene, Open Chests, Fixed Auto Family Roll)
+-- 4. Mission & Menu UI Automation Loop (Auto Retry, Skip Cutscene, Open Chests, Family Roll)
 task.spawn(function()
     while State.Running do
         task.wait(0.4)
@@ -1263,7 +1394,7 @@ task.spawn(function()
                 end
             end
 
-            -- Auto Retry Mission / Raid (Saves config & queues script before clicking Retry!)
+            -- Auto Retry Mission / Raid
             if Config.AutoRetry then
                 local rewards = interface:FindFirstChild("Rewards")
                 local rMain = rewards and rewards:FindFirstChild("Main")
@@ -1285,7 +1416,7 @@ task.spawn(function()
                 end
             end
 
-            -- Fixed Auto Family Roll (Supports Buttons_2.Roll + Stop on Legendary/Mythic Family)
+            -- Auto Family Roll (Uses BOTH Direct Remote `Family -> Roll` AND UI Button Click!)
             if Config.AutoRollFamily then
                 local currentFamily = getCurrentFamilyName()
                 if Config.StopOnRareFamily and isRareFamily(currentFamily) then
@@ -1293,18 +1424,36 @@ task.spawn(function()
                     saveConfig()
                     warn("[🎉 AOT:R Hub] Stopped rolling! Obtained rare family: " .. tostring(currentFamily))
                 else
+                    refreshRemotes()
+                    local rolledFamily = nil
+                    if Remotes.GET then
+                        pcall(function()
+                            local _, _, _, newFam = Remotes.GET:InvokeServer("Family", "Roll")
+                            if type(newFam) == "string" then
+                                rolledFamily = newFam
+                            end
+                        end)
+                    end
+
                     local rollBtn = findFamilyRollButton()
                     if rollBtn and isGuiVisible(rollBtn) then
                         smartClickButton(rollBtn, 0, 0)
-                        task.wait(Config.RollInterval)
                     end
+
+                    if Config.StopOnRareFamily and isRareFamily(rolledFamily or getCurrentFamilyName()) then
+                        Config.AutoRollFamily = false
+                        saveConfig()
+                        warn("[🎉 AOT:R Hub] Stopped rolling! Obtained rare family: " .. tostring(rolledFamily or getCurrentFamilyName()))
+                    end
+
+                    task.wait(Config.RollInterval)
                 end
             end
         end
     end
 end)
 
---// Stealth ESP System
+--// Stealth ESP System (Also highlights Utgard & all-map Refill stations!)
 local function clearESP()
     for _, item in pairs(State.ESPObjects) do
         pcall(function()
@@ -1343,20 +1492,17 @@ local function updateESP()
     end
 
     if Config.RefillESP then
-        local unclimbable = workspace:FindFirstChild("Unclimbable")
-        local reloads = unclimbable and unclimbable:FindFirstChild("Reloads")
-        if reloads then
-            for _, station in ipairs(reloads:GetChildren()) do
-                if not State.ESPObjects[station] then
-                    local hl = Instance.new("Highlight")
-                    hl.Name = randomIdentifier(10)
-                    hl.FillColor = Color3.fromRGB(50, 220, 120)
-                    hl.OutlineColor = Color3.fromRGB(200, 255, 220)
-                    hl.FillTransparency = 0.5
-                    hl.Adornee = station
-                    hl.Parent = StealthESPFolder
-                    State.ESPObjects[station] = hl
-                end
+        for _, refillPart in ipairs(getAllWorkspaceRefills()) do
+            local adorneeTarget = (refillPart.Parent and refillPart.Parent:IsA("Model") and refillPart.Parent) or refillPart
+            if adorneeTarget and not State.ESPObjects[adorneeTarget] then
+                local hl = Instance.new("Highlight")
+                hl.Name = randomIdentifier(10)
+                hl.FillColor = Color3.fromRGB(50, 220, 120)
+                hl.OutlineColor = Color3.fromRGB(200, 255, 220)
+                hl.FillTransparency = 0.45
+                hl.Adornee = adorneeTarget
+                hl.Parent = StealthESPFolder
+                State.ESPObjects[adorneeTarget] = hl
             end
         end
     end
@@ -1473,7 +1619,7 @@ local TitleLabel = Instance.new("TextLabel")
 TitleLabel.Size = UDim2.new(1, -135, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text = "🛡️ AOT: Revolution | Delta Hub v2.0 [حفظ تلقائي]"
+TitleLabel.Text = "🛡️ AOT: Revolution | Delta Hub v2.1 [Utgard + AutoSave]"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -1598,7 +1744,7 @@ local function createTab(tabName, order)
     return page
 end
 
--- UI Component Helpers (Automatically sync with saved Config & auto-save on change!)
+-- UI Component Helpers
 local function addSectionHeader(parent, text)
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(1, 0, 0, 24)
@@ -1920,23 +2066,24 @@ addActionButton(TabSecurity, "🚨 زر الطوارئ: إيقاف كل التف
     pcall(updateAllNapes)
     pcall(clearESP)
     if HumanoidRootPart then
+        HumanoidRootPart.Anchored = false
         HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
     end
 end)
 
 -- [TAB 3: COMBAT & MISSIONS]
-addSectionHeader(TabCombat, "الذخيرة والتعبئة (Blades, Gas & Escape)")
+addSectionHeader(TabCombat, "الذخيرة والتعبئة (شامل أوتغارد وجميع الخرائط)")
 
 addToggle(TabCombat, "تبديل السيوف تلقائياً (Auto Reload Blades)", Config.AutoReloadBlades, function(val)
     Config.AutoReloadBlades = val
 end)
 
-addToggle(TabCombat, "إعادة التعبئة التلقائية (Auto Refill Station)", Config.AutoRefill, function(val)
+addToggle(TabCombat, "إعادة التعبئة التلقائية (Auto Refill All Maps)", Config.AutoRefill, function(val)
     Config.AutoRefill = val
 end)
 
-addActionButton(TabCombat, "🔄 تعبئة وتبديل السيوف فوراً الآن (Force Refill Now)", function()
-    performRefillNow(true)
+addActionButton(TabCombat, "🔄 الانتقال لنقطة التعبئة والتعبئة فوراً (TP & Refill Now)", function()
+    task.spawn(executeFullStationRefill)
 end)
 
 addToggle(TabCombat, "الهروب من مسكة العملاق (Auto Escape Grab)", Config.AutoEscapeGrab, function(val)
@@ -2009,7 +2156,7 @@ addToggle(TabMisc, "لف العائلات تلقائياً (Auto Family Roll)", 
     Config.AutoRollFamily = val
 end)
 
-addToggle(TabMisc, "التوقف تلقائياً عند (Yeager / Ackerman / Reiss)", Config.StopOnRareFamily, function(val)
+addToggle(TabMisc, "التوقف تلقائياً عند (Yeager / Ackerman / Reiss / Fritz)", Config.StopOnRareFamily, function(val)
     Config.StopOnRareFamily = val
 end)
 
@@ -2018,6 +2165,14 @@ addStepper(TabMisc, "سرعة اللف بالثواني (Roll Delay)", 0.2, 5, 0
 end)
 
 addActionButton(TabMisc, "🎲 لف العائلة مرة واحدة الآن (Roll Once)", function()
+    refreshRemotes()
+    if Remotes.GET then
+        task.spawn(function()
+            pcall(function()
+                Remotes.GET:InvokeServer("Family", "Roll")
+            end)
+        end)
+    end
     local btn = findFamilyRollButton()
     if btn then
         smartClickButton(btn, 0, 0)
@@ -2079,6 +2234,9 @@ local function cleanupScript()
     Config.AutoKillBlades = false
     Config.AutoFarmTS = false
     Config.ExpandNapes = false
+    pcall(function()
+        if HumanoidRootPart then HumanoidRootPart.Anchored = false end
+    end)
     pcall(updateAllNapes)
     pcall(clearESP)
 
@@ -2106,4 +2264,4 @@ if getgenv then
     getgenv().AOTR_Delta_Cleanup = cleanupScript
 end
 
-print("[🛡️ AOT:R Protected Delta Hub v2.0] Loaded! Auto-Save & Auto-Execute on Next Raid Active.")
+print("[🛡️ AOT:R Protected Delta Hub v2.1] Loaded! Utgard Refill + AutoSave Active.")
