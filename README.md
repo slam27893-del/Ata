@@ -1,54 +1,38 @@
-# 🛡️ Delta Multi-Game Hub v3.1 [Attack on Titan: Revolution + Pixel Blade + Auto Fishing]
+# 🛡️ Delta Multi-Game Hub [PROTECTED v3.2 - Turbo & Game-Isolated Edition]
+**Attack on Titan: Revolution (AOT:R) + Pixel Blade**
 
-سكربت شامل ومتعدد الألعاب (**Multi-Game Hub**) يعمل بنفس الرابط الواحد تلقائياً على كلٍ من:
-1. ⚔️ **Attack on Titan: Revolution (AOT:R)** (جميع الخرائط بما فيها أوتغارد Utgard + الغارات Raids + لفات العائلات).
-2. 🗡️ **Pixel Blade** (فارم الدنجن والغرف تلقائياً + فارم الغارات + **🎣 الصيد التلقائي بالصنارة Auto Fishing** + Kill Aura + تقوية الضرر الخارق والشفاء + فتح الصناديق والأمنيات + دخول البوابات تلقائياً).
-
-مزود **بحفظ تلقائي للإعدادات وتشغيل تلقائي بين الغارات والدنجن (`Auto-Save & Queue On Teleport`)** + **نظام حماية متعدد الطبقات (`Multi-Layer Anti-Ban & Stealth Protection`)** لمشغل **Delta Executor** (أندرويد، iOS، والكمبيوتر).
+سكربت شامل ومحمي بالكامل لتطبيق **Delta Executor** (جوال Android / iOS والكمبيوتر PC) يدعم لعبتين في رابط واحد مع **فصل كامل للواجهة والتابات حسب الماب النشط**:
+1. **Pixel Blade** (تفريم الدنجن الذكي بـ 4 طبقات استهداف + انتقال لنار المخيم `CamnpfireRocky` والغرف + الصيد التلقائي السريع التيربو بالصنارة `Turbo Auto Fishing 60FPS` + الغارات + Kill Aura + داش لا نهائي وإلغاء الكولداون + فتح الصناديق والأمنيات والبوابات).
+2. **Attack on Titan: Revolution (AOT:R)** (جميع الخرائط والغارات شاملة خريطة أوتغارد Utgard + لف العائلات + رماح الرعد + الحماية من الباند).
 
 ---
 
-## 🚀 رابط التشغيل الموحد في دلتا (Delta Executor)
+## ✨ التحديثات والإصلاحات الجديدة في الإصدار v3.2
 
-نفس السطر يشتغل تلقائياً في اللعبتين (يتعرف على الماب الذي دخلته ويفتح تبويباته تلقائياً):
+1. **🧩 فصل كامل لخانات وتابات كل لعبة (Game-Isolated UI Tabs)**:
+   - عند فتح السكربت داخل **Pixel Blade** تظهر **فقط** خانات وخيارات **Pixel Blade** (`🗡️ الدنجن والقتال`, `🎣 الصيد بالصنارة`, `🎁 الصناديق والبوابات`, `🛡️ الحماية`, `👁️ الرادار والفريمات`) ولن تظهر أي خانة خاصة بـ Attack on Titan.
+   - وعند فتح السكربت داخل **Attack on Titan: Revolution** تظهر **فقط** خانات وخيارات **AOT:R**.
+2. **🗡️ إصلاح جذري لتفريم الدنجن في Pixel Blade (Smart 4-Tier Dungeon Auto Farm)**:
+   - **إصلاح توقف اللاعب (No More Frozen Velocity)**: إلغاء تجميد السرعة عندما لا يوجد هدف نشط، وتثبيت موقع اللاعب خلف الوحش بسرعة **60 إطار/ثانية (`RunService.Heartbeat`)** بدون تجميد الوحش قبل دخوله (`hadEntrance`).
+   - **استهداف ذكي من 4 طبقات في `workspace:GetDescendants()`**:
+     1. أيدي زعيم `Korth` (`BookHand`).
+     2. الوحوش النشطة (`hadEntrance == true`).
+     3. وحوش الغرفة المنتظرة (`hadEntrance == false`) لتفعيل دخولها تلقائياً.
+     4. جميع الأعداء الأحياء في الدنجن والغارات.
+   - **انتقال تلقائي بين الموجات والغرف (`CamnpfireRocky` & Next Room)**: عند انتهاء وحوش الغرفة، ينتقل اللاعب تلقائياً إلى نار المخيم (`CamnpfireRocky`) أو الغرفة التالية لتشغيل الموجة الجديدة.
+   - **إصلاح الضرر الكامل (`swing` + `onHit 9e9` + `tornado`)**: تفعيل `swing:FireServer()` مع ضرر موجب `9e9` ومهارة الإعصار لضمان موت الوحوش والزعماء فوراً.
+3. **🎣 نظام الصيد التلقائي التيربو السريع بالصنارة (Turbo Auto Fishing v3.2)**:
+   - **إزالة التقطيع والبطء نهائياً**: فحص واجهة `PlayerGui` فقط بسرعة **60FPS (`0.015s`)** مع رصد الفروقات الفورية (`Baseline UI Diff`) وألوان `UIGradient` و`UIStroke` و`ImageColor3`.
+   - **ضغط ذكي متفاعل للدائرة الخضراء (`Reactive Hold E`)**: يضغط `E` ويفلتها في نفس اللحظة التي تظهر فيها الدائرة الزرقاء دون أي انتظار زائد.
+   - **سحب تيربو فائق السرعة (`Turbo Reel Taps`)**: أكثر من **40 نقرة في الثانية (`0.012s`)** مع دعم `ProximityPrompt:InputHoldBegin/End` و`VirtualInputManager` وأزرار الجوال.
+   - **الدورة الذكية السريعة (`Smart Turbo Cycle`)**: لا ينتظر 15 ثانية أبداً؛ إذا كانت ألوان الواجهة مخفية داخل صور اللعبة ينفذ تلقائياً دورة الرمي والضغط والسحب التيربو المتواصل.
+
+---
+
+## 📲 كود التشغيل المباشر في Delta Executor
+
+انسخ السطر التالي والصقه في **Delta Executor** واضغط **Execute**:
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/slam27893-del/Ata/main/script.lua"))()
 ```
-
----
-
-## 🎣 الصيد التلقائي بالصنارة في Pixel Blade (`🎣 Pixel صيد بالصنارة` — جديد في v3.1)
-
-- **Auto Fish (رمي الصنارة + حل الميني جيم + السحب التلقائي):**
-  1. **تجهيز الصنارة ورميها تلقائياً:** يمسك الصنارة من الحقيبة (`Backpack`) ويتفاعل مع نقطة الصيد (`ProximityPrompt` + ضغط مطول `E` / زر الجوال).
-  2. **الدائرة الخضراء (`RGB 39, 162, 71` / `circle_popup`):** يضغط مطولاً تلقائياً عند ظهور الدائرة الخضراء الأولى (`1.5s`) والدوائر الخضراء الإضافية (`1.0s`).
-  3. **الدائرة الزرقاء (`RGB 195, 223, 224` / `Reel`):** ينقر بسرعة تلقائياً (`12x` نقرات سريعة + زر الجوال + الريموت) لسحب السمكة فوراً.
-  4. **قفل شريط الصيد (`Bar Lock`) + حارس المهلة (`15s Timeout`):** يثبت شريط الصيد على الهدف تلقائياً، وإذا لم يعلق سمك خلال 15 ثانية يعيد رمي الصنارة تلقائياً بدون توقف.
-  5. **عداد مباشر للأسماك المصطادة وحالة الصيد** داخل القائمة مع التحكم الكامل بسرعة الرمي والضغط والنقر.
-
----
-
-## 🗡️ مميزات القتال والدنجن في Pixel Blade
-
-1. **⚔️ قسم الفارم والقتال (`🗡️ Pixel Blade قتال`):**
-   - **Auto Farm Dungeon & Auto Farm Raids**
-   - **Kill Aura + Tornado**
-   - **God Buff & Auto Heal**
-   - **Infinite Dash & No Ability Cooldown (`داش لا نهائي وإلغاء انتظار المهارات`)**
-   - **Auto Breakables & Expand Enemy Hitbox**
-
-2. **🎁 قسم الترقيات والصناديق والبوابات (`🎁 Pixel صناديق وبوابات`):**
-   - **Auto Pick Upgrade & Hide Popup**
-   - **Auto Open All Chests & Auto Open Wishes**
-   - **Auto Claim Daily Quests & Achievements**
-   - **Auto Join Dungeon Portal (`Grasslands` / `AncientSands` — `Normal` / `Heroic` / `Nightmare`)**
-
----
-
-## ⚔️ مميزات ماب Attack on Titan: Revolution (AOT:R)
-
-- **Auto Kill Titans (Blades) & Auto Thunder Spears:** مع أولوية الزعماء وحارس الـ 20 ثانية الآمن لإنهاء المهمة.
-- **Auto Refill (Utgard + All Maps) & Auto Reload Blades:** دعم كامل لجميع الخرائط بما فيها قلعة أوتغارد (`Utgard`).
-- **Auto Family Roll:** عبر الريموت المباشر والواجهة مع التوقف التلقائي عند العائلات النادرة (`Yeager / Ackerman / Reiss / Fritz / Helos`).
-- **Auto Retry, Auto Skip Cutscene, Auto Raid Chests, Auto Escape Grab.**

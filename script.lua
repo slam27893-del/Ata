@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v3.0 - Auto-Detect & Auto-Save]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v3.2 - Auto-Detect & Auto-Save]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (Dungeons, Raids, Kill Aura, Auto Upgrade, Chests & Portals)
+      2. Pixel Blade (Dungeons, Raids, Fast Auto Fishing, Kill Aura, Chests & Portals)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -75,12 +75,29 @@ local Humanoid = Character and Character:FindFirstChildWhichIsA("Humanoid")
 local function updateCharacterRefs(char)
     Character = char
     if char then
-        HumanoidRootPart = char:WaitForChild("HumanoidRootPart", 10)
-        Humanoid = char:WaitForChild("Humanoid", 10)
+        HumanoidRootPart = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 10)
+        Humanoid = char:FindFirstChildWhichIsA("Humanoid") or char:WaitForChild("Humanoid", 10)
     else
         HumanoidRootPart = nil
         Humanoid = nil
     end
+end
+
+local function refreshCharacterRefs()
+    local curChar = LocalPlayer.Character
+    if curChar ~= Character then
+        Character = curChar
+        HumanoidRootPart = curChar and (curChar:FindFirstChild("HumanoidRootPart") or curChar.PrimaryPart)
+        Humanoid = curChar and curChar:FindFirstChildWhichIsA("Humanoid")
+    elseif curChar then
+        if not HumanoidRootPart or not HumanoidRootPart.Parent then
+            HumanoidRootPart = curChar:FindFirstChild("HumanoidRootPart") or curChar.PrimaryPart
+        end
+        if not Humanoid or not Humanoid.Parent then
+            Humanoid = curChar:FindFirstChildWhichIsA("Humanoid")
+        end
+    end
+    return Character, HumanoidRootPart, Humanoid
 end
 
 if Character then
@@ -98,34 +115,74 @@ local PIXEL_BLADE_PLACE_IDS = {
     [18172553902] = true
 }
 
+local AOTR_ALL_PLACE_IDS = {
+    [13379208636] = true, [15393224326] = true, -- Main Menu
+    [14916516914] = true, [15393230099] = true, -- Lobby
+    [13379349730] = true, [17373821193] = true, -- Shiganshina
+    [14012874501] = true, [15393230324] = true, -- Trost
+    [14638336319] = true, [17373828240] = true, -- Giant Forest
+    [13904207646] = true, [17373824844] = true, -- Outskirts
+    [15220308770] = true, [18182863694] = true, -- Utgard
+    [17688739434] = true, [110415968652032] = true, -- Docks
+    [15824912319] = true, [139092911630535] = true, -- Stohess
+    [126678335159530] = true, [133979984250876] = true -- Chapel
+}
+
 local AOTR_PLACE_IDS = {
     MainMenu = 13379208636,
     Lobby = 14916516914
 }
 
-local function detectCurrentGame()
+local function checkGameSignatures()
     if PIXEL_BLADE_PLACE_IDS[game.PlaceId] then
         return "PixelBlade"
     end
-    if ReplicatedStorage:FindFirstChild("remotes") and (
-        ReplicatedStorage.remotes:FindFirstChild("onHit")
-        or ReplicatedStorage.remotes:FindFirstChild("abilityHit")
-        or ReplicatedStorage.remotes:FindFirstChild("plrUpgrade")
-        or ReplicatedStorage.remotes:FindFirstChild("playerTP")
+    if AOTR_ALL_PLACE_IDS[game.PlaceId] then
+        return "AOTR"
+    end
+
+    local pbRem = ReplicatedStorage:FindFirstChild("remotes")
+    if pbRem and (
+        pbRem:FindFirstChild("onHit")
+        or pbRem:FindFirstChild("abilityHit")
+        or pbRem:FindFirstChild("plrUpgrade")
+        or pbRem:FindFirstChild("playerTP")
+        or pbRem:FindFirstChild("swing")
     ) then
         return "PixelBlade"
     end
-    if LocalPlayer:FindFirstChild("plrStats") or PlayerGui:FindFirstChild("gameUI") then
+    if LocalPlayer:FindFirstChild("plrStats")
+        or PlayerGui:FindFirstChild("gameUI")
+        or workspace:FindFirstChild("worldType")
+        or workspace:FindFirstChild("inCutscene")
+        or ReplicatedStorage:FindFirstChild("constants") then
         return "PixelBlade"
     end
-    return "AOTR"
+
+    local aotAssets = ReplicatedStorage:FindFirstChild("Assets")
+    if aotAssets and aotAssets:FindFirstChild("Remotes") then
+        return "AOTR"
+    end
+    if PlayerGui:FindFirstChild("Interface") or workspace:FindFirstChild("Titans") or workspace:FindFirstChild("Unclimbable") then
+        return "AOTR"
+    end
+
+    return nil
+end
+
+local function detectCurrentGame()
+    local detected = checkGameSignatures()
+    if detected then return detected end
+    local waitUntil = tick() + 3.0
+    while tick() < waitUntil do
+        task.wait(0.1)
+        detected = checkGameSignatures()
+        if detected then return detected end
+    end
+    return "PixelBlade"
 end
 
 local CurrentGame = detectCurrentGame()
-task.spawn(function()
-    task.wait(2)
-    CurrentGame = detectCurrentGame()
-end)
 
 --// Remotes Discovery (AOT:R)
 local Remotes = {
@@ -223,17 +280,18 @@ local Config = {
     PB_EnemyESP = false,
     PB_InfDashAndNoCD = false,
 
-    -- [Game 2] Pixel Blade Auto Fishing (الصيد التلقائي بالصنارة)
+    -- [Game 2] Pixel Blade Auto Fishing (الصيد التلقائي السريع بالصنارة)
     PB_AutoFish = false,
     PB_AutoEquipRod = true,
     PB_AutoFishMinigame = true,
-    PB_FishCastHold = 1.0,
-    PB_FishGreenHold = 1.5,
-    PB_FishFollowGreenHold = 1.0,
-    PB_FishTapCount = 12,
-    PB_FishTapInterval = 0.08,
-    PB_FishPostWait = 1.8,
-    PB_FishTimeout = 15
+    PB_FishSmartCycle = true,
+    PB_FishCastHold = 0.6,
+    PB_FishGreenHold = 1.0,
+    PB_FishFollowGreenHold = 0.8,
+    PB_FishTapCount = 16,
+    PB_FishTapInterval = 0.015,
+    PB_FishPostWait = 0.35,
+    PB_FishTimeout = 5
 }
 
 local function saveConfig()
@@ -273,6 +331,22 @@ local function loadSavedConfig()
             if Config[k] ~= nil and type(Config[k]) == type(v) then
                 Config[k] = v
             end
+        end
+        -- Upgrade legacy v3.1 slow fishing timings automatically to v3.2 fast timings
+        if Config.PB_FishTapInterval and Config.PB_FishTapInterval >= 0.05 then
+            Config.PB_FishTapInterval = 0.015
+        end
+        if Config.PB_FishPostWait and Config.PB_FishPostWait >= 1.2 then
+            Config.PB_FishPostWait = 0.35
+        end
+        if Config.PB_FishTimeout and Config.PB_FishTimeout >= 12 then
+            Config.PB_FishTimeout = 5
+        end
+        if Config.PB_FishCastHold and Config.PB_FishCastHold >= 1.0 then
+            Config.PB_FishCastHold = 0.6
+        end
+        if Config.PB_FishGreenHold and Config.PB_FishGreenHold >= 1.4 then
+            Config.PB_FishGreenHold = 1.0
         end
     end
 end
@@ -329,8 +403,12 @@ local State = {
     Connections = {},
     ESPObjects = {},
     PB_EnteredBossRoom = false,
+    PB_ActiveTargetCFrame = nil,
     PB_FishCaughtCount = 0,
     PB_LastCastTime = 0,
+    PB_CachedFishPrompt = nil,
+    PB_LastFishPromptScan = 0,
+    PB_BaselineGuiSet = {},
     PB_FishStatusText = "في انتظار التفعيل..."
 }
 
@@ -1114,50 +1192,212 @@ end
 
 local PB_IGNORE_MOBS = { "ShroomKnight", "blender" }
 
+local function getPBMobTargetPart(mob)
+    if not mob or not mob:IsA("Model") then return nil end
+    if mob.Name == "Maneater" then
+        local r = mob:FindFirstChild("Root") or mob:FindFirstChild("HumanoidRootPart")
+        if r and r:IsA("BasePart") then return r end
+    end
+    if mob.Name == "BookHand" then
+        local bh = mob:FindFirstChild("basehitbox", true) or mob.PrimaryPart or mob:FindFirstChildWhichIsA("BasePart", true)
+        if bh and bh:IsA("BasePart") then return bh end
+    end
+    local hrp = mob:FindFirstChild("HumanoidRootPart")
+        or mob:FindFirstChild("Root")
+        or mob:FindFirstChild("basehitbox", true)
+        or mob:FindFirstChild("Head")
+        or mob.PrimaryPart
+        or mob:FindFirstChildWhichIsA("BasePart", true)
+    if hrp and hrp:IsA("BasePart") then
+        return hrp
+    end
+    return nil
+end
+
 local function isPBMobAlive(mob)
-    if not mob or table.find(PB_IGNORE_MOBS, mob.Name) then return false end
+    if not mob or not mob:IsA("Model") or table.find(PB_IGNORE_MOBS, mob.Name) then return false end
+    if mob == Character or Players:GetPlayerFromCharacter(mob) then return false end
+
     local worldType = workspace:FindFirstChild("worldType")
     local isAncientSands = worldType and worldType.Value == "AncientSands"
     if isAncientSands and mob:FindFirstChild("worm") and mob.worm:FindFirstChild("Health") then
         return mob.worm.Health.Value > 0
     end
+
+    local hpVal = mob:FindFirstChild("Health") or (mob.Name == "BookHand" and mob:FindFirstChild("Health", true))
+    if hpVal and hpVal:IsA("NumberValue") then
+        return hpVal.Value > 0
+    end
+
     local hum = mob:FindFirstChildOfClass("Humanoid")
-    if hum and hum.Health > 0 then
-        return true
+    if hum then
+        return hum.Health > 0
     end
-    local hpVal = mob:FindFirstChild("Health")
-    if hpVal and hpVal:IsA("NumberValue") and hpVal.Value > 0 then
-        return true
-    end
+
     return false
 end
 
-local function findClosestPBMob(isRaid)
-    if not Character or not HumanoidRootPart then return nil end
+-- 4-Tier Smart Target Finder across workspace:GetDescendants()
+-- Tier 1: Korth Boss BookHand models
+-- Tier 2: Dungeon Mobs with hadEntrance == true
+-- Tier 3: Dungeon Mobs with hadEntrance == false (moving to them triggers their entrance!)
+-- Tier 4: Any living non-player enemy Model with basehitbox / Humanoid
+local function findBestPBTarget(isRaid)
+    refreshCharacterRefs()
+    if not Character or not HumanoidRootPart then return nil, nil end
     local myPos = HumanoidRootPart.Position
-    local closestMob = nil
-    local minDist = math.huge
 
-    for _, v in ipairs(workspace:GetChildren()) do
-        if v ~= Character and v:IsA("Model") and not table.find(PB_IGNORE_MOBS, v.Name) then
-            local hasEntrance = (v:GetAttribute("hadEntrance") ~= nil) or isRaid
-            if hasEntrance and isPBMobAlive(v) then
-                local ok, pivot = pcall(function() return v:GetPivot() end)
-                if ok and pivot then
-                    local d = (pivot.Position - myPos).Magnitude
-                    if d < minDist then
-                        minDist = d
-                        closestMob = v
-                    end
+    local tier1Mob, tier1Part, tier1Dist = nil, nil, math.huge
+    local tier2Mob, tier2Part, tier2Dist = nil, nil, math.huge
+    local tier3Mob, tier3Part, tier3Dist = nil, nil, math.huge
+    local tier4Mob, tier4Part, tier4Dist = nil, nil, math.huge
+
+    local seenModels = {}
+
+    local function considerModel(m)
+        if not m or seenModels[m] or m == Character then return end
+        seenModels[m] = true
+        if not m:IsA("Model") or table.find(PB_IGNORE_MOBS, m.Name) then return end
+        if Players:GetPlayerFromCharacter(m) then return end
+        if string.find(string.lower(m.Name), "breakable") then return end
+        if m:FindFirstChildOfClass("ClickDetector") then return end
+
+        -- Check Korth BookHand first
+        if m.Name == "BookHand" and isPBMobAlive(m) then
+            local part = getPBMobTargetPart(m)
+            if part then
+                local d = (part.Position - myPos).Magnitude
+                if d < tier1Dist then
+                    tier1Dist = d
+                    tier1Mob = m
+                    tier1Part = part
+                end
+            end
+            return
+        end
+
+        if not isPBMobAlive(m) then return end
+        local part = getPBMobTargetPart(m)
+        if not part then return end
+        local d = (part.Position - myPos).Magnitude
+
+        local entranceAttr = m:GetAttribute("hadEntrance")
+        if entranceAttr == true then
+            if d < tier2Dist then
+                tier2Dist = d
+                tier2Mob = m
+                tier2Part = part
+            end
+        elseif entranceAttr == false then
+            if d < tier3Dist then
+                tier3Dist = d
+                tier3Mob = m
+                tier3Part = part
+            end
+        elseif isRaid or m:FindFirstChild("basehitbox", true) or not m:FindFirstChild("weapon") then
+            if d < tier4Dist then
+                tier4Dist = d
+                tier4Mob = m
+                tier4Part = part
+            end
+        end
+    end
+
+    for _, child in ipairs(workspace:GetChildren()) do
+        if child:IsA("Model") then
+            considerModel(child)
+        end
+    end
+
+    for _, desc in ipairs(workspace:GetDescendants()) do
+        if desc:IsA("Model") and not seenModels[desc] then
+            considerModel(desc)
+        elseif desc:IsA("Humanoid") and desc.Parent and desc.Parent:IsA("Model") and not seenModels[desc.Parent] then
+            considerModel(desc.Parent)
+        end
+    end
+
+    if tier1Mob then return tier1Mob, tier1Part end
+    if tier2Mob then return tier2Mob, tier2Part end
+    if tier3Mob then return tier3Mob, tier3Part end
+    if tier4Mob then return tier4Mob, tier4Part end
+    return nil, nil
+end
+
+-- Campfire & Room Transition Finder when no mobs are alive
+local function findPBCampfireOrProgression()
+    refreshCharacterRefs()
+    if not HumanoidRootPart then return nil end
+
+    -- 1. Check for CamnpfireRocky (Campfire transition between waves/rooms)
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and (obj.Name == "CamnpfireRocky" or string.find(string.lower(obj.Name), "campfire")) then
+            local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)
+            if part then
+                return part.CFrame * CFrame.new(0, 3, 0)
+            end
+        end
+    end
+
+    -- 2. Trigger any nearby enabled dungeon ProximityPrompt (doors/levers/campfires)
+    if fireproximityprompt then
+        local myPos = HumanoidRootPart.Position
+        for _, desc in ipairs(workspace:GetDescendants()) do
+            if desc:IsA("ProximityPrompt") and desc.Enabled then
+                local p = desc.Parent
+                if p and p:IsA("Model") then
+                    p = p.PrimaryPart or p:FindFirstChildWhichIsA("BasePart", true)
+                end
+                if p and p:IsA("BasePart") and (p.Position - myPos).Magnitude <= 35 then
+                    pcall(function() fireproximityprompt(desc) end)
                 end
             end
         end
     end
 
-    return closestMob
+    -- 3. Check final numbered room transition ONLY when no mobs are alive
+    local diffObj = workspace:FindFirstChild("difficulty")
+    local diffVal = diffObj and diffObj.Value
+    local r6 = workspace:FindFirstChild("6")
+    local r7 = workspace:FindFirstChild("7")
+    local r8 = workspace:FindFirstChild("8")
+    local r9 = workspace:FindFirstChild("9")
+    if diffVal == "Normal" and r6 and r7 then
+        local ok, pv = pcall(function() return r7:GetPivot() end)
+        if ok and pv then return CFrame.new(pv.Position + Vector3.new(0, 5, 0)) end
+    elseif diffVal == "Heroic" and r7 and r8 then
+        local ok, pv = pcall(function() return r8:GetPivot() end)
+        if ok and pv then return CFrame.new(pv.Position + Vector3.new(0, 5, 0)) end
+    elseif diffVal == "Nightmare" and r8 and r9 then
+        local ok, pv = pcall(function() return r9:GetPivot() end)
+        if ok and pv then return CFrame.new(pv.Position + Vector3.new(0, 5, 0)) end
+    end
+
+    return nil
+end
+
+local function computePBTargetCFrame(mob, part)
+    if not mob or not part then return nil end
+    if mob.Name == "Maneater" then
+        local root = mob:FindFirstChild("Root") or part
+        local mobPos = Vector3.new(root.Position.X, 35, root.Position.Z)
+        local targetPos = mobPos + (root.CFrame.LookVector * -7)
+        return CFrame.lookAt(targetPos, mobPos)
+    elseif mob.Name == "Nekros" or mob.Name == "DarkNekros" then
+        local mobPos = part.Position
+        local targetPos = mobPos + (part.CFrame.LookVector * 2)
+        return CFrame.lookAt(targetPos, mobPos)
+    elseif mob.Name == "BookHand" then
+        return part.CFrame * CFrame.new(0, 0, 5)
+    else
+        local mobPos = part.Position
+        local targetPos = mobPos + (part.CFrame.LookVector * -6) + Vector3.new(0, 1.5, 0)
+        return CFrame.lookAt(targetPos, mobPos)
+    end
 end
 
 local function applyPBTempBuffAndHeal()
+    refreshCharacterRefs()
     local pbRemotes = getPBRemotes()
     local abilityEvent = pbRemotes and pbRemotes:FindFirstChild("abilityEvent")
     if not abilityEvent or not Character then return end
@@ -1181,59 +1421,98 @@ local function applyPBTempBuffAndHeal()
 end
 
 local function pbKillAllNearby(maxRange, isRaid)
+    refreshCharacterRefs()
     local pbRemotes = getPBRemotes()
     if not pbRemotes or not HumanoidRootPart then return end
 
+    local swing = pbRemotes:FindFirstChild("swing")
     local onHit = pbRemotes:FindFirstChild("onHit")
     local useAbility = pbRemotes:FindFirstChild("useAbility")
     local abilityHit = pbRemotes:FindFirstChild("abilityHit")
     local abilityEvent = pbRemotes:FindFirstChild("abilityEvent")
     local myPos = HumanoidRootPart.Position
+    local rangeLimit = maxRange or 120
+    local didSwing = false
 
-    for _, v in ipairs(workspace:GetChildren()) do
-        if v ~= Character and v:IsA("Model") and not table.find(PB_IGNORE_MOBS, v.Name) then
-            -- Breakables check
-            if Config.PB_AutoBreakables and string.find(string.lower(v.Name), "breakable") then
-                local bHum = v:FindFirstChildOfClass("Humanoid")
-                if bHum and onHit then
+    local seenModels = {}
+    local function processEnemyModel(v)
+        if not v or seenModels[v] or v == Character or not v:IsA("Model") then return end
+        seenModels[v] = true
+        if table.find(PB_IGNORE_MOBS, v.Name) or Players:GetPlayerFromCharacter(v) then return end
+
+        -- Breakables check
+        if Config.PB_AutoBreakables and string.find(string.lower(v.Name), "breakable") then
+            local bHum = v:FindFirstChildOfClass("Humanoid")
+            if bHum and onHit then
+                pcall(function()
+                    if swing and not didSwing then
+                        didSwing = true
+                        swing:FireServer()
+                    end
+                    onHit:FireServer(bHum, 9e9, {}, 0)
+                    onHit:FireServer(bHum, -math.huge, {}, 0)
+                end)
+            end
+            return
+        end
+
+        if isPBMobAlive(v) then
+            local part = getPBMobTargetPart(v)
+            local dist = part and (part.Position - myPos).Magnitude or math.huge
+            if dist <= rangeLimit or isRaid then
+                if swing and not didSwing then
+                    didSwing = true
+                    pcall(function() swing:FireServer() end)
+                end
+
+                local hum = v:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    if onHit then
+                        pcall(function()
+                            onHit:FireServer(hum, 9e9, {}, 0)
+                            onHit:FireServer(hum, -math.huge, {}, 0)
+                        end)
+                    end
+                    if useAbility and abilityHit then
+                        pcall(function()
+                            useAbility:FireServer("tornado")
+                            abilityHit:FireServer(hum, 9e9, { stun = { dur = 1 } })
+                            abilityHit:FireServer(hum, math.huge, { stun = { dur = 1 } })
+                        end)
+                    end
+                end
+
+                if v.Name == "Maneater" and useAbility then
                     pcall(function()
-                        onHit:FireServer(bHum, -math.huge, {}, 0)
+                        useAbility:FireServer("lunarSpell")
                     end)
                 end
-            elseif isPBMobAlive(v) then
-                local ok, pivot = pcall(function() return v:GetPivot() end)
-                local dist = (ok and pivot) and (pivot.Position - myPos).Magnitude or math.huge
-                if dist <= (maxRange or 100) or isRaid then
-                    local hum = v:FindFirstChildOfClass("Humanoid")
-                    if hum then
-                        if onHit then
-                            pcall(function()
-                                onHit:FireServer(hum, -math.huge, {}, 0)
-                            end)
-                        end
-                        if useAbility and abilityHit then
-                            pcall(function()
-                                useAbility:FireServer("tornado")
-                                abilityHit:FireServer(hum, math.huge, { stun = { dur = 1 } })
-                            end)
-                        end
-                    end
-                    if v.Name == "Maneater" and useAbility then
-                        pcall(function()
-                            useAbility:FireServer("lunarSpell")
-                        end)
-                    elseif v.Name == "Atticus" and VirtualInputManager then
-                        pcall(function()
-                            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-                        end)
-                    end
+
+                if (v.Name == "Atticus" or v.Name == "Korth" or v.Name == "BookHand" or dist <= 22) and VirtualInputManager then
+                    pcall(function()
+                        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+                        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+                    end)
                 end
             end
         end
     end
 
-    if Config.PB_GodBuffAndHeal and abilityEvent and Character then
+    for _, child in ipairs(workspace:GetChildren()) do
+        if child:IsA("Model") then
+            processEnemyModel(child)
+        end
+    end
+
+    for _, desc in ipairs(workspace:GetDescendants()) do
+        if desc:IsA("Humanoid") and desc.Parent and desc.Parent:IsA("Model") then
+            processEnemyModel(desc.Parent)
+        elseif desc:IsA("Model") and desc.Name == "BookHand" then
+            processEnemyModel(desc)
+        end
+    end
+
+    if (Config.PB_GodBuffAndHeal or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) and abilityEvent and Character then
         pcall(function()
             abilityEvent:FireServer({
                 char = Character,
@@ -1274,18 +1553,20 @@ local function applyPBInfDashAndNoCD()
 end
 
 --//===========================================================================
---// 🎣 PIXEL BLADE AUTO-FISHING ENGINE (الصيد التلقائي بالصنارة)
+--// 🎣 PIXEL BLADE ULTRA-FAST AUTO-FISHING ENGINE (v3.2 TURBO EDITION)
 --//===========================================================================
+-- Zero-lag 60Hz PlayerGui inspection (no workspace:GetDescendants() in loop!)
 -- Supports:
--- 1. Auto-equipping Fishing Rod Tool from Backpack + activating Rod Tool
--- 2. Auto-triggering Fishing ProximityPrompts & Holding E to Cast
--- 3. Real-time Minigame Detection:
---    - Green Circle Phase (RGB 39,162,71 / circle_popup -> circle_maxe): Hold E (1.5s first, 1.0s follow-up)
---    - Blue Reel Phase (RGB 195,223,224 / Reel_10..Reel_1): Rapid E Tap Burst (12x) + Mobile Button Click
---    - Slider/Bar Minigame Lock (snaps bar/cursor onto fish/target zone)
---    - Direct Fishing Remote invocation + 15s Cast Timeout Auto-Recast
+-- 1. Baseline UI Diffing + Color/UIGradient/UIStroke/Name/Text Detection
+-- 2. Reactive Green Circle Hold (releases the instant Blue appears or Green clears)
+-- 3. Ultra-Fast Turbo Blue Reel Taps (0.012s press/release, >40 taps/sec)
+-- 4. ProximityPrompt:InputHoldBegin/End + VirtualInputManager E + Mobile Touch Button
+-- 5. Smart Hybrid Auto-Cycle so fishing NEVER stalls even if UI textures hide colors
 
-local FISHING_KEYWORDS = { "fish", "rod", "pole", "cast", "reel", "catch", "bite", "hook", "bobber", "pond", "minigame" }
+local FISHING_KEYWORDS = {
+    "fish", "rod", "pole", "cast", "reel", "catch", "bite", "hook", "bobber",
+    "pond", "minigame", "circle", "ring", "qte", "popup", "bar", "sweetspot"
+}
 
 local function hasFishingKeyword(str)
     if not str or str == "" then return false end
@@ -1299,14 +1580,13 @@ local function hasFishingKeyword(str)
 end
 
 local function pbEquipFishingRod()
+    refreshCharacterRefs()
     if not Character then return nil end
-    -- Check if already holding a rod tool
     for _, child in ipairs(Character:GetChildren()) do
         if child:IsA("Tool") and hasFishingKeyword(child.Name) then
             return child
         end
     end
-    -- Check Backpack for a rod tool
     local backpack = LocalPlayer:FindFirstChildOfClass("Backpack") or LocalPlayer:FindFirstChild("Backpack")
     if backpack then
         for _, tool in ipairs(backpack:GetChildren()) do
@@ -1325,13 +1605,23 @@ local function pbEquipFishingRod()
     return Character:FindFirstChildOfClass("Tool")
 end
 
-local function pbFindFishingPrompt()
+local function pbFindFishingPrompt(forceRefresh)
+    refreshCharacterRefs()
     if not HumanoidRootPart then return nil end
+    if not forceRefresh
+        and State.PB_CachedFishPrompt
+        and State.PB_CachedFishPrompt.Parent
+        and State.PB_CachedFishPrompt.Enabled
+        and (tick() - State.PB_LastFishPromptScan) < 2.5 then
+        return State.PB_CachedFishPrompt
+    end
+
+    State.PB_LastFishPromptScan = tick()
     local myPos = HumanoidRootPart.Position
     local bestFishPrompt = nil
     local bestFishDist = math.huge
     local closestAnyPrompt = nil
-    local closestAnyDist = 18
+    local closestAnyDist = 22
 
     for _, desc in ipairs(workspace:GetDescendants()) do
         if desc:IsA("ProximityPrompt") and desc.Enabled then
@@ -1359,7 +1649,8 @@ local function pbFindFishingPrompt()
         end
     end
 
-    return bestFishPrompt or closestAnyPrompt
+    State.PB_CachedFishPrompt = bestFishPrompt or closestAnyPrompt
+    return State.PB_CachedFishPrompt
 end
 
 local function pbFireFishingRemotes(stage)
@@ -1399,27 +1690,6 @@ local function pbFireFishingRemotes(stage)
             end
         end
     end
-
-    -- Also check inside equipped Rod Tool for remotes
-    if Character then
-        local tool = Character:FindFirstChildOfClass("Tool")
-        if tool then
-            for _, desc in ipairs(tool:GetDescendants()) do
-                if desc:IsA("RemoteEvent") then
-                    pcall(function()
-                        if stage == "cast" then
-                            desc:FireServer("Cast", true)
-                            desc:FireServer(100, true)
-                        elseif stage == "reel" then
-                            desc:FireServer("Catch", true)
-                            desc:FireServer("Reel", true)
-                            desc:FireServer(100, true)
-                        end
-                    end)
-                end
-            end
-        end
-    end
 end
 
 local function isColorCloseTo(col, tr, tg, tb, tol)
@@ -1432,127 +1702,145 @@ local function isColorCloseTo(col, tr, tg, tb, tol)
         and math.abs(b - tb) <= tol
 end
 
--- Pixel Blade Fishing UI & Color Detector
--- Trigger Green: RGB(39, 162, 71)
--- Trigger Blue:  RGB(195, 223, 224)
-local function pbDetectFishingMinigameState(hubScreenGui)
-    local greenDetected = false
-    local blueDetected = false
-    local mobileFishBtn = nil
-    local fishingGuiActive = false
-
-    local function inspectGuiTree(rootContainer)
-        if not rootContainer then return end
-        for _, obj in ipairs(rootContainer:GetDescendants()) do
-            if obj:IsA("GuiObject") and isGuiVisible(obj) then
-                local objNameLow = string.lower(obj.Name)
-                local parentNameLow = obj.Parent and string.lower(obj.Parent.Name) or ""
-                local inFishingContext = hasFishingKeyword(objNameLow)
-                    or hasFishingKeyword(parentNameLow)
-                    or string.find(objNameLow, "circle", 1, true) ~= nil
-                    or string.find(objNameLow, "reel", 1, true) ~= nil
-                    or string.find(parentNameLow, "circle", 1, true) ~= nil
-                    or string.find(parentNameLow, "minigame", 1, true) ~= nil
-
-                if inFishingContext then
-                    fishingGuiActive = true
-                end
-
-                -- 1. Check Colors (BackgroundColor3, ImageColor3, TextColor3)
-                local colorsToCheck = {}
-                if obj.BackgroundTransparency < 0.95 then
-                    table.insert(colorsToCheck, obj.BackgroundColor3)
-                end
-                if (obj:IsA("ImageLabel") or obj:IsA("ImageButton")) and obj.ImageTransparency < 0.95 then
-                    table.insert(colorsToCheck, obj.ImageColor3)
-                end
-                local stroke = obj:FindFirstChildOfClass("UIStroke")
-                if stroke and stroke.Enabled and stroke.Transparency < 0.95 then
-                    table.insert(colorsToCheck, stroke.Color)
-                end
-
-                for _, col in ipairs(colorsToCheck) do
-                    -- Exact Pixel Blade Green Circle RGB(39, 162, 71)
-                    if isColorCloseTo(col, 39, 162, 71, 26) then
-                        greenDetected = true
-                        fishingGuiActive = true
-                    end
-                    -- Exact Pixel Blade Blue Center Circle RGB(195, 223, 224)
-                    if isColorCloseTo(col, 195, 223, 224, 24) then
-                        blueDetected = true
-                    end
-                    -- If inside a fishing/circle UI, also check dominant green or blue
-                    if inFishingContext then
-                        local r = math.floor(col.R * 255 + 0.5)
-                        local g = math.floor(col.G * 255 + 0.5)
-                        local b = math.floor(col.B * 255 + 0.5)
-                        if g >= 135 and g > (r + 45) and g > (b + 35) then
-                            greenDetected = true
-                        elseif b >= 165 and b > (r + 12) and g >= 140 then
-                            blueDetected = true
-                        end
-                    end
-                end
-
-                -- 2. Check Name / Text cues for Circle Popup / Reel_10..Reel_1
-                if string.find(objNameLow, "circle_popup", 1, true) or string.find(objNameLow, "circle_maxe", 1, true) then
-                    greenDetected = true
-                    fishingGuiActive = true
-                elseif string.find(objNameLow, "reel_", 1, true) or objNameLow == "reel" then
-                    blueDetected = true
-                    fishingGuiActive = true
-                end
-
-                if obj:IsA("TextLabel") or obj:IsA("TextButton") then
-                    local txtLow = string.lower(tostring(obj.Text or ""))
-                    if string.find(txtLow, "hold e", 1, true) or string.find(txtLow, "hold!", 1, true) then
-                        greenDetected = true
-                        fishingGuiActive = true
-                    elseif string.find(txtLow, "tap e", 1, true) or string.find(txtLow, "reel!", 1, true) or string.find(txtLow, "spam", 1, true) or string.find(txtLow, "pull", 1, true) then
-                        blueDetected = true
-                        fishingGuiActive = true
-                    end
-                end
-
-                -- 3. Auto-Align Bar/Cursor if a Bar Minigame exists
-                if inFishingContext and (objNameLow == "bar" or objNameLow == "playerbar" or objNameLow == "cursor" or objNameLow == "catchbar") and obj.Parent then
-                    local targetObj = obj.Parent:FindFirstChild("fish")
-                        or obj.Parent:FindFirstChild("Fish")
-                        or obj.Parent:FindFirstChild("target")
-                        or obj.Parent:FindFirstChild("Target")
-                        or obj.Parent:FindFirstChild("zone")
-                        or obj.Parent:FindFirstChild("sweetspot")
-                    if targetObj and targetObj:IsA("GuiObject") then
-                        pcall(function()
-                            obj.Position = targetObj.Position
-                        end)
-                    end
-                end
-
-                -- 4. Detect Mobile Touch Fishing Button
-                if obj:IsA("GuiButton") and inFishingContext then
-                    mobileFishBtn = obj
+-- Snapshot currently visible GUI objects before casting so any newly visible minigame popup is caught instantly
+local function pbSnapshotBaselineGui(hubScreenGui)
+    local baseline = {}
+    local ignoreGui = hubScreenGui or State.HubScreenGui
+    for _, gui in ipairs(PlayerGui:GetChildren()) do
+        if gui ~= ignoreGui and gui ~= StealthESPFolder and gui:IsA("LayerCollector") and gui.Enabled then
+            for _, obj in ipairs(gui:GetDescendants()) do
+                if obj:IsA("GuiObject") and isGuiVisible(obj) then
+                    baseline[obj] = true
                 end
             end
         end
     end
+    State.PB_BaselineGuiSet = baseline
+end
 
-    -- Scan PlayerGui (excluding our own Hub ScreenGui)
-    local ignoreGui = hubScreenGui or State.HubScreenGui
-    for _, gui in ipairs(PlayerGui:GetChildren()) do
-        if gui ~= ignoreGui and gui ~= StealthESPFolder and gui:IsA("LayerCollector") and gui.Enabled then
-            inspectGuiTree(gui)
+-- Fast 0-lag PlayerGui Fishing Detector (checks Colors, UIGradient, UIStroke, Names, Text & Baseline Diff)
+local function pbDetectFishingMinigameState(hubScreenGui)
+    local greenDetected = false
+    local blueDetected = false
+    local newPopupDetected = false
+    local mobileFishBtn = nil
+    local fishingGuiActive = false
+    local baseline = State.PB_BaselineGuiSet or {}
+
+    local function checkSingleColor(col, inFishingContext)
+        if not col then return end
+        -- Exact Pixel Blade Green Circle RGB(39, 162, 71)
+        if isColorCloseTo(col, 39, 162, 71, 32) then
+            greenDetected = true
+            fishingGuiActive = true
+        end
+        -- Exact Pixel Blade Blue Center Circle RGB(195, 223, 224)
+        if isColorCloseTo(col, 195, 223, 224, 30) then
+            blueDetected = true
+            fishingGuiActive = true
+        end
+        if inFishingContext then
+            local r = math.floor(col.R * 255 + 0.5)
+            local g = math.floor(col.G * 255 + 0.5)
+            local b = math.floor(col.B * 255 + 0.5)
+            if g >= 130 and g > (r + 35) and g > (b + 25) then
+                greenDetected = true
+                fishingGuiActive = true
+            elseif b >= 160 and g >= 135 and b > (r + 10) then
+                blueDetected = true
+                fishingGuiActive = true
+            end
         end
     end
 
-    -- Also scan nearby BillboardGuis in Workspace (e.g. popup above bobber/player)
-    if HumanoidRootPart then
-        local myPos = HumanoidRootPart.Position
-        for _, desc in ipairs(workspace:GetDescendants()) do
-            if desc:IsA("BillboardGui") and desc.Enabled then
-                local adornee = desc.Adornee or desc.Parent
-                if adornee and adornee:IsA("BasePart") and (adornee.Position - myPos).Magnitude <= 45 then
-                    inspectGuiTree(desc)
+    local ignoreGui = hubScreenGui or State.HubScreenGui
+    for _, gui in ipairs(PlayerGui:GetChildren()) do
+        if gui ~= ignoreGui and gui ~= StealthESPFolder and gui:IsA("LayerCollector") and gui.Enabled then
+            for _, obj in ipairs(gui:GetDescendants()) do
+                if obj:IsA("GuiObject") and isGuiVisible(obj) then
+                    local objNameLow = string.lower(obj.Name)
+                    local parentNameLow = obj.Parent and string.lower(obj.Parent.Name) or ""
+                    local inFishingContext = hasFishingKeyword(objNameLow)
+                        or hasFishingKeyword(parentNameLow)
+                        or not baseline[obj]
+
+                    if hasFishingKeyword(objNameLow) or hasFishingKeyword(parentNameLow) then
+                        fishingGuiActive = true
+                    end
+
+                    -- If a new centered GUI popup became visible after casting
+                    if not baseline[obj] and obj.AbsoluteSize.X >= 25 and obj.AbsoluteSize.Y >= 25 then
+                        newPopupDetected = true
+                        fishingGuiActive = true
+                    end
+
+                    -- 1. Check Colors (BackgroundColor3, ImageColor3, UIStroke, UIGradient)
+                    if obj.BackgroundTransparency < 0.95 then
+                        checkSingleColor(obj.BackgroundColor3, inFishingContext)
+                    end
+                    if (obj:IsA("ImageLabel") or obj:IsA("ImageButton")) and obj.ImageTransparency < 0.95 then
+                        checkSingleColor(obj.ImageColor3, inFishingContext)
+                    end
+                    local stroke = obj:FindFirstChildOfClass("UIStroke")
+                    if stroke and stroke.Enabled and stroke.Transparency < 0.95 then
+                        checkSingleColor(stroke.Color, true)
+                    end
+                    local grad = obj:FindFirstChildOfClass("UIGradient")
+                    if grad and grad.Enabled then
+                        pcall(function()
+                            for _, kp in ipairs(grad.Color.Keypoints) do
+                                checkSingleColor(kp.Value, true)
+                            end
+                        end)
+                    end
+
+                    -- 2. Check Name / Asset / Text cues for Circle Popup / Reel_10..Reel_1
+                    if string.find(objNameLow, "circle_popup", 1, true)
+                        or string.find(objNameLow, "circle_maxe", 1, true)
+                        or string.find(objNameLow, "hold", 1, true) then
+                        greenDetected = true
+                        fishingGuiActive = true
+                    elseif string.find(objNameLow, "reel_", 1, true)
+                        or objNameLow == "reel"
+                        or string.find(objNameLow, "mash", 1, true)
+                        or string.find(objNameLow, "tap", 1, true) then
+                        blueDetected = true
+                        fishingGuiActive = true
+                    end
+
+                    if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+                        local txtLow = string.lower(tostring(obj.Text or ""))
+                        if string.find(txtLow, "hold", 1, true) then
+                            greenDetected = true
+                            fishingGuiActive = true
+                        elseif string.find(txtLow, "tap", 1, true)
+                            or string.find(txtLow, "reel", 1, true)
+                            or string.find(txtLow, "spam", 1, true)
+                            or string.find(txtLow, "pull", 1, true) then
+                            blueDetected = true
+                            fishingGuiActive = true
+                        end
+                    end
+
+                    -- 3. Auto-Align Bar/Cursor if a Bar Minigame exists
+                    if inFishingContext and (objNameLow == "bar" or objNameLow == "playerbar" or objNameLow == "cursor" or objNameLow == "catchbar") and obj.Parent then
+                        local targetObj = obj.Parent:FindFirstChild("fish")
+                            or obj.Parent:FindFirstChild("Fish")
+                            or obj.Parent:FindFirstChild("target")
+                            or obj.Parent:FindFirstChild("Target")
+                            or obj.Parent:FindFirstChild("zone")
+                            or obj.Parent:FindFirstChild("sweetspot")
+                        if targetObj and targetObj:IsA("GuiObject") then
+                            pcall(function()
+                                obj.Position = targetObj.Position
+                            end)
+                        end
+                    end
+
+                    -- 4. Detect Mobile Touch Fishing Button
+                    if obj:IsA("GuiButton") and inFishingContext then
+                        mobileFishBtn = obj
+                    end
                 end
             end
         end
@@ -1561,13 +1849,13 @@ local function pbDetectFishingMinigameState(hubScreenGui)
     return {
         green = greenDetected,
         blue = blueDetected,
+        newPopup = newPopupDetected,
         fishingGuiActive = fishingGuiActive,
         mobileBtn = mobileFishBtn
     }
 end
 
-local function pbHoldFishingInput(durationSeconds, mobileBtn, stage)
-    local dur = math.max(0.05, tonumber(durationSeconds) or 1.0)
+local function pbPressEDown(mobileBtn, prompt, stage)
     pcall(function()
         if Config.PB_AutoEquipRod then
             local rod = pbEquipFishingRod()
@@ -1575,38 +1863,31 @@ local function pbHoldFishingInput(durationSeconds, mobileBtn, stage)
                 pcall(function() rod:Activate() end)
             end
         end
-
-        if stage == "cast" and fireproximityprompt then
-            local prompt = pbFindFishingPrompt()
-            if prompt then
+        if prompt and prompt.Parent and prompt.Enabled then
+            if stage == "cast" and fireproximityprompt then
                 pcall(function() fireproximityprompt(prompt) end)
             end
+            pcall(function() prompt:InputHoldBegin() end)
         end
-
-        pbFireFishingRemotes(stage or "green")
-
         if VirtualInputManager then
             VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
         end
-
         if mobileBtn then
-            pcall(function()
-                if firesignal then
-                    pcall(firesignal, mobileBtn.MouseButton1Down)
-                end
-                activateGuiButton(mobileBtn)
-            end)
+            if firesignal then
+                pcall(firesignal, mobileBtn.MouseButton1Down)
+            end
+            activateGuiButton(mobileBtn)
         end
     end)
+end
 
-    local endTime = tick() + dur
-    while State.Running and Config.PB_AutoFish and tick() < endTime do
-        task.wait(0.02)
-    end
-
+local function pbReleaseEUp(mobileBtn, prompt)
     pcall(function()
         if VirtualInputManager then
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+        end
+        if prompt and prompt.Parent then
+            pcall(function() prompt:InputHoldEnd() end)
         end
         if mobileBtn and firesignal then
             pcall(firesignal, mobileBtn.MouseButton1Up)
@@ -1614,24 +1895,70 @@ local function pbHoldFishingInput(durationSeconds, mobileBtn, stage)
     end)
 end
 
-local function pbTapFishingInput(tapCount, tapInterval, mobileBtn)
-    local count = math.clamp(tonumber(tapCount) or 12, 1, 30)
-    local interval = math.clamp(tonumber(tapInterval) or 0.08, 0.01, 0.5)
+-- Reactive Hold E: holds E for up to maxHoldSeconds, but releases IMMEDIATELY if Blue appears or Green clears!
+local function pbReactiveHoldE(maxHoldSeconds, mobileBtn, stage, stopOnGreenClear)
+    local dur = math.max(0.08, tonumber(maxHoldSeconds) or 0.9)
+    local prompt = pbFindFishingPrompt(stage == "cast")
+    pbFireFishingRemotes(stage or "green")
+    pbPressEDown(mobileBtn, prompt, stage)
 
-    for _ = 1, count do
+    local startT = tick()
+    local endT = startT + dur
+    while State.Running and Config.PB_AutoFish and tick() < endT do
+        task.wait(0.015)
+        local st = pbDetectFishingMinigameState(nil)
+        if st.blue then
+            -- Blue reel phase started! Release E immediately so we can start rapid-tapping!
+            break
+        end
+        if stage == "cast" and st.green then
+            -- Bite/Green circle appeared during cast hold!
+            break
+        end
+        if stopOnGreenClear and (tick() - startT) >= 0.25 and not st.green and not st.newPopup then
+            break
+        end
+    end
+
+    pbReleaseEUp(mobileBtn, prompt)
+end
+
+-- Ultra-Fast Turbo Tap E (0.012s press / 0.012s release, >40 taps/sec!)
+local function pbTurboTapE(tapCount, tapInterval, mobileBtn)
+    local count = math.clamp(tonumber(tapCount) or 16, 4, 40)
+    local interval = math.clamp(tonumber(tapInterval) or 0.015, 0.008, 0.08)
+    local prompt = pbFindFishingPrompt(false)
+
+    pbFireFishingRemotes("reel")
+
+    for i = 1, count do
         if not State.Running or not Config.PB_AutoFish then
             break
         end
         pcall(function()
             if VirtualInputManager then
                 VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                task.wait(0.025)
-                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+            end
+            if prompt and prompt.Parent and prompt.Enabled then
+                pcall(function()
+                    prompt:InputHoldBegin()
+                    if fireproximityprompt and i % 4 == 1 then
+                        fireproximityprompt(prompt)
+                    end
+                end)
             end
             if mobileBtn then
                 activateGuiButton(mobileBtn)
             end
-            pbFireFishingRemotes("reel")
+        end)
+        task.wait(0.012)
+        pcall(function()
+            if VirtualInputManager then
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+            end
+            if prompt and prompt.Parent then
+                pcall(function() prompt:InputHoldEnd() end)
+            end
         end)
         task.wait(interval)
     end
@@ -1641,9 +1968,11 @@ end
 --// MAIN LOOPS (AOT:R + PIXEL BLADE)
 --//===========================================================================
 
--- 1. Heartbeat Loop (AOT:R Auto Kill + Pixel Blade Velocity Lock & Hitbox)
+-- 1. Heartbeat Loop (AOT:R Auto Kill + Pixel Blade 60FPS Target Lock)
 table.insert(State.Connections, RunService.Heartbeat:Connect(function()
-    if not State.Running or not HumanoidRootPart then return end
+    if not State.Running then return end
+    refreshCharacterRefs()
+    if not HumanoidRootPart then return end
 
     if Config.VelocityAntiFling then
         if HumanoidRootPart.AssemblyLinearVelocity.Magnitude > 650 then
@@ -1654,10 +1983,8 @@ table.insert(State.Connections, RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- Pixel Blade Active Farm Velocity Lock & Noclip
+    -- Pixel Blade Active Farm 60FPS Position Lock & Noclip
     if Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid then
-        HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
-        HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
         if Character then
             for _, part in ipairs(Character:GetDescendants()) do
                 if part:IsA("BasePart") then
@@ -1665,6 +1992,13 @@ table.insert(State.Connections, RunService.Heartbeat:Connect(function()
                 end
             end
         end
+        if State.PB_ActiveTargetCFrame then
+            HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+            HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
+            HumanoidRootPart.CFrame = State.PB_ActiveTargetCFrame
+        end
+    else
+        State.PB_ActiveTargetCFrame = nil
     end
 
     if Config.PB_InfDashAndNoCD then
@@ -1738,12 +2072,14 @@ table.insert(State.Connections, RunService.Heartbeat:Connect(function()
     end
 end))
 
--- 2. Pixel Blade Auto Farm Loop (Dungeons, Raids, Kill Aura, Upgrades, Chests, Portals)
+-- 2. Pixel Blade Auto Farm Loop (Dungeons, Raids, Kill Aura, Upgrades)
 task.spawn(function()
     while State.Running do
-        task.wait(0.15)
+        task.wait(0.08)
         local pbRemotes = getPBRemotes()
         if pbRemotes then
+            refreshCharacterRefs()
+
             -- God Buff & Auto Heal
             if Config.PB_GodBuffAndHeal then
                 applyPBTempBuffAndHeal()
@@ -1758,8 +2094,8 @@ task.spawn(function()
             if Config.PB_ExpandHitbox then
                 pcall(function()
                     local sz = Vector3.new(Config.PB_HitboxSize, Config.PB_HitboxSize, Config.PB_HitboxSize)
-                    for _, v in ipairs(workspace:GetChildren()) do
-                        if v ~= Character and v:IsA("Model") and isPBMobAlive(v) then
+                    for _, v in ipairs(workspace:GetDescendants()) do
+                        if v:IsA("Model") and v ~= Character and isPBMobAlive(v) then
                             local bh = v:FindFirstChild("basehitbox")
                             if bh and bh:IsA("BasePart") then
                                 bh.Size = sz
@@ -1781,63 +2117,47 @@ task.spawn(function()
                 local cutscene = workspace:FindFirstChild("inCutscene")
                 local inCutscene = cutscene and cutscene.Value == true
 
-                -- Auto Room Progression in Dungeon
-                if Config.PB_AutoFarmDungeon then
-                    pcall(function()
-                        local diffObj = workspace:FindFirstChild("difficulty")
-                        local diffVal = diffObj and diffObj.Value
-                        local r6 = workspace:FindFirstChild("6")
-                        local r7 = workspace:FindFirstChild("7")
-                        local r8 = workspace:FindFirstChild("8")
-                        local r9 = workspace:FindFirstChild("9")
-                        if diffVal == "Normal" and r6 and r7 then
-                            HumanoidRootPart.CFrame = CFrame.new(r7:GetPivot().Position + Vector3.new(0, 5, 0))
-                        elseif diffVal == "Heroic" and r7 and r8 then
-                            HumanoidRootPart.CFrame = CFrame.new(r8:GetPivot().Position + Vector3.new(0, 5, 0))
-                        elseif diffVal == "Nightmare" and r8 and r9 then
-                            HumanoidRootPart.CFrame = CFrame.new(r9:GetPivot().Position + Vector3.new(0, 5, 0))
-                        end
-                    end)
-                end
-
                 if not inCutscene then
-                    local mob = findClosestPBMob(isRaid)
-                    if mob then
+                    local mob, mobPart = findBestPBTarget(isRaid)
+                    if mob and mobPart then
                         pcall(function()
                             if mob.Name == "Atticus" and not State.PB_EnteredBossRoom then
                                 local vault = workspace:FindFirstChild("Vault")
                                 if vault then
-                                    HumanoidRootPart.CFrame = CFrame.new(vault:GetPivot().Position)
+                                    local vaultCF = CFrame.new(vault:GetPivot().Position)
+                                    State.PB_ActiveTargetCFrame = vaultCF
+                                    HumanoidRootPart.CFrame = vaultCF
                                     State.PB_EnteredBossRoom = true
-                                    task.wait(0.5)
+                                    task.wait(0.4)
                                 end
                             end
 
-                            local mobPos, mobLook
-                            if mob.Name == "Maneater" and mob:FindFirstChild("Root") then
-                                mobPos = Vector3.new(mob.Root.Position.X, 35, mob.Root.Position.Z)
-                                mobLook = mob.Root.CFrame.LookVector
-                            elseif mob:FindFirstChild("HumanoidRootPart") then
-                                mobPos = mob.HumanoidRootPart.Position
-                                mobLook = mob.HumanoidRootPart.CFrame.LookVector
-                                if not isRaid then
-                                    mob.HumanoidRootPart.Anchored = true
-                                end
-                            else
-                                local pv = mob:GetPivot()
-                                mobPos = pv.Position
-                                mobLook = pv.LookVector
+                            local targetCF = computePBTargetCFrame(mob, mobPart)
+                            if targetCF then
+                                State.PB_ActiveTargetCFrame = targetCF
+                                HumanoidRootPart.CFrame = targetCF
                             end
-
-                            local offsetMult = (mob.Name == "Nekros" or mob.Name == "DarkNekros") and 2 or -7
-                            local targetPos = mobPos + (mobLook * offsetMult)
-                            HumanoidRootPart.CFrame = CFrame.lookAt(targetPos, mobPos)
 
                             applyPBTempBuffAndHeal()
-                            pbKillAllNearby(120, isRaid)
+                            pbKillAllNearby(500, true)
                         end)
+                    elseif Config.PB_AutoFarmDungeon then
+                        -- No alive mob right now -> Move to Campfire (CamnpfireRocky) or next room trigger!
+                        local progCF = findPBCampfireOrProgression()
+                        if progCF then
+                            State.PB_ActiveTargetCFrame = progCF
+                            HumanoidRootPart.CFrame = progCF
+                        else
+                            State.PB_ActiveTargetCFrame = nil
+                        end
+                    else
+                        State.PB_ActiveTargetCFrame = nil
                     end
+                else
+                    State.PB_ActiveTargetCFrame = nil
                 end
+            else
+                State.PB_ActiveTargetCFrame = nil
             end
 
             -- Auto Pick Dungeon Upgrades
@@ -1849,7 +2169,7 @@ task.spawn(function()
                     end
                     if VirtualInputManager then
                         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Two, false, game)
-                        task.wait(0.03)
+                        task.wait(0.02)
                         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Two, false, game)
                     end
                     if Config.PB_HideUpgradePopup then
@@ -1951,92 +2271,106 @@ task.spawn(function()
     end
 end)
 
--- 3.5. Pixel Blade Auto-Fishing Loop (الصيد التلقائي بالصنارة: رمي + دائرة خضراء + سحب أزرق)
+-- 3.5. Pixel Blade Ultra-Fast Auto-Fishing Loop (v3.2 Turbo: 60FPS UI + Smart Hybrid Cycle)
 task.spawn(function()
     while State.Running do
         if Config.PB_AutoFish then
             pcall(function()
-                -- Step 1: Cast Rod (Equip Rod + Fire Prompt + Hold E)
-                State.PB_FishStatusText = "🎣 جاري رمي الصنارة..."
+                -- Snapshot baseline visible GUI before casting so any new minigame popup is caught at 60FPS
+                pbSnapshotBaselineGui(nil)
+
+                -- Step 1: Fast Cast Rod (Equip Rod + Fire Prompt + Reactive Hold E)
+                State.PB_FishStatusText = "🎣 رمي سريع للصنارة..."
                 local initState = pbDetectFishingMinigameState(nil)
-                pbHoldFishingInput(Config.PB_FishCastHold, initState.mobileBtn, "cast")
+                if not initState.green and not initState.blue then
+                    pbReactiveHoldE(Config.PB_FishCastHold, initState.mobileBtn, "cast", false)
+                end
                 State.PB_LastCastTime = tick()
 
                 if not Config.PB_AutoFish then return end
 
                 local firstGreenSeen = false
-                local actionHappened = false
-                local lastGreenTime = 0
+                local smartCycleTriggered = false
 
-                -- Step 2 & 3: Watch for Green Circle(s) and Blue Center Reel
+                -- Step 2 & 3: 60Hz (0.015s) Zero-Lag Monitor for Green Circle, Blue Reel, or Smart Cycle
                 while State.Running and Config.PB_AutoFish do
                     local mgState = pbDetectFishingMinigameState(nil)
 
                     if Config.PB_AutoFishMinigame then
-                        -- First Green Circle Detected
-                        if not firstGreenSeen and mgState.green then
-                            firstGreenSeen = true
-                            actionHappened = true
-                            lastGreenTime = tick()
-                            State.PB_FishStatusText = "🟢 الدائرة الخضراء الأولى -> ضغط مطول (Hold E)"
-                            pbHoldFishingInput(Config.PB_FishGreenHold, mgState.mobileBtn, "green")
-
-                            -- Wait briefly for green circle to clear (up to 1.0s)
-                            local clearWait = tick() + 1.0
-                            while State.Running and Config.PB_AutoFish and tick() < clearWait do
-                                local st = pbDetectFishingMinigameState(nil)
-                                if not st.green or st.blue then break end
-                                task.wait(0.02)
+                        -- Priority A: Blue Center Reel Detected -> Immediate Turbo Tap E!
+                        if mgState.blue then
+                            State.PB_FishStatusText = "🔵 سحب سريع تيربو (Turbo Reel Tap)!"
+                            pbTurboTapE(Config.PB_FishTapCount, Config.PB_FishTapInterval, mgState.mobileBtn)
+                            -- Continue tapping if blue stays visible
+                            local extraLimit = tick() + 1.2
+                            while State.Running and Config.PB_AutoFish and tick() < extraLimit do
+                                local checkSt = pbDetectFishingMinigameState(nil)
+                                if not checkSt.blue then break end
+                                pbTurboTapE(6, Config.PB_FishTapInterval, checkSt.mobileBtn)
                             end
-
-                        -- Blue Center Reel Detected (after green or directly in fishing UI)
-                        elseif (firstGreenSeen or mgState.fishingGuiActive) and mgState.blue and not mgState.green then
-                            actionHappened = true
-                            State.PB_FishStatusText = "🔵 الدائرة الزرقاء -> نقر سريع للسحب (Reel Tap)"
-                            pbTapFishingInput(Config.PB_FishTapCount, Config.PB_FishTapInterval, mgState.mobileBtn)
                             State.PB_FishCaughtCount = State.PB_FishCaughtCount + 1
-                            State.PB_FishStatusText = "✅ تم سحب السمكة! (#" .. tostring(State.PB_FishCaughtCount) .. ") انتظار..."
-
-                            -- Post-tap wait before next cast
-                            local postEnd = tick() + (tonumber(Config.PB_FishPostWait) or 1.8)
-                            while State.Running and Config.PB_AutoFish and tick() < postEnd do
-                                task.wait(0.05)
-                            end
+                            State.PB_FishStatusText = "✅ تم الصيد! (#" .. tostring(State.PB_FishCaughtCount) .. ")"
+                            task.wait(math.clamp(tonumber(Config.PB_FishPostWait) or 0.35, 0.1, 2.0))
                             break
 
-                        -- Follow-up Green Circle Detected
-                        elseif firstGreenSeen and mgState.green then
-                            actionHappened = true
-                            lastGreenTime = tick()
-                            State.PB_FishStatusText = "🟢 دائرة خضراء إضافية -> ضغط مطول (Follow-up Hold E)"
-                            pbHoldFishingInput(Config.PB_FishFollowGreenHold, mgState.mobileBtn, "green")
+                        -- Priority B: Green Circle or New Minigame Popup Detected -> Reactive Hold E -> Immediate Turbo Reel!
+                        elseif mgState.green or mgState.newPopup then
+                            local holdDur = firstGreenSeen and Config.PB_FishFollowGreenHold or Config.PB_FishGreenHold
+                            firstGreenSeen = true
+                            State.PB_FishStatusText = "🟢 الدائرة الخضراء -> ضغط ذكي (Reactive Hold E)!"
+                            pbReactiveHoldE(holdDur, mgState.mobileBtn, "green", true)
 
-                            local clearWait = tick() + 1.0
-                            while State.Running and Config.PB_AutoFish and tick() < clearWait do
-                                local st = pbDetectFishingMinigameState(nil)
-                                if not st.green or st.blue then break end
-                                task.wait(0.02)
+                            -- Check immediately if a second green circle appeared or if we transition straight to Blue Turbo Reel
+                            task.wait(0.05)
+                            local afterGreen = pbDetectFishingMinigameState(nil)
+                            if afterGreen.green and not afterGreen.blue then
+                                State.PB_FishStatusText = "🟢 دائرة خضراء ثانية -> ضغط ذكي..."
+                                pbReactiveHoldE(Config.PB_FishFollowGreenHold, afterGreen.mobileBtn, "green", true)
+                                task.wait(0.04)
+                                afterGreen = pbDetectFishingMinigameState(nil)
+                            end
+
+                            -- Execute immediate Turbo Reel Tap burst!
+                            if afterGreen.blue or afterGreen.fishingGuiActive or Config.PB_FishSmartCycle then
+                                State.PB_FishStatusText = "🔵 سحب تيربو فوري (Instant Reel Burst)!"
+                                pbTurboTapE(Config.PB_FishTapCount, Config.PB_FishTapInterval, afterGreen.mobileBtn)
+                                State.PB_FishCaughtCount = State.PB_FishCaughtCount + 1
+                                State.PB_FishStatusText = "✅ تم الصيد! (#" .. tostring(State.PB_FishCaughtCount) .. ")"
+                                task.wait(math.clamp(tonumber(Config.PB_FishPostWait) or 0.35, 0.1, 2.0))
+                                break
                             end
                         end
                     end
 
-                    -- Timeout Guard: If no action within PB_FishTimeout seconds (or 6s after green with no blue), force burst & recast
-                    local elapsedSinceCast = tick() - State.PB_LastCastTime
-                    local timeoutSec = tonumber(Config.PB_FishTimeout) or 15
-                    if (not actionHappened and elapsedSinceCast >= timeoutSec)
-                        or (firstGreenSeen and (tick() - lastGreenTime) >= 6.0) then
-                        State.PB_FishStatusText = "⏱️ انتهت المهلة -> إعادة رمي الصنارة تلقائياً..."
-                        pbTapFishingInput(math.min(10, Config.PB_FishTapCount), 0.02, mgState.mobileBtn)
-                        task.wait(0.25)
+                    -- Priority C: Smart Hybrid Auto-Cycle (never waits 15s if texture hides UI colors!)
+                    local elapsed = tick() - State.PB_LastCastTime
+                    if Config.PB_FishSmartCycle and not firstGreenSeen and not smartCycleTriggered and elapsed >= 2.6 then
+                        smartCycleTriggered = true
+                        State.PB_FishStatusText = "⚡ دورة صيد سريعة (Hold E -> Turbo Tap E)..."
+                        pbReactiveHoldE(Config.PB_FishGreenHold, mgState.mobileBtn, "green", false)
+                        task.wait(0.04)
+                        pbTurboTapE(Config.PB_FishTapCount, Config.PB_FishTapInterval, mgState.mobileBtn)
+                        State.PB_FishCaughtCount = State.PB_FishCaughtCount + 1
+                        State.PB_FishStatusText = "✅ اكتملت الدورة (#" .. tostring(State.PB_FishCaughtCount) .. ") -> رمي جديد..."
+                        task.wait(math.clamp(tonumber(Config.PB_FishPostWait) or 0.35, 0.1, 2.0))
                         break
                     end
 
-                    task.wait(0.025)
+                    -- Fast Timeout Guard
+                    local timeoutSec = math.clamp(tonumber(Config.PB_FishTimeout) or 5, 3, 20)
+                    if elapsed >= timeoutSec then
+                        State.PB_FishStatusText = "🔄 إعادة رمي سريعة..."
+                        pbTurboTapE(8, 0.012, mgState.mobileBtn)
+                        task.wait(0.15)
+                        break
+                    end
+
+                    task.wait(0.015)
                 end
             end)
         else
             State.PB_FishStatusText = "متوقف (Idle)"
-            task.wait(0.35)
+            task.wait(0.25)
         end
     end
 end)
@@ -2374,8 +2708,8 @@ local function updateESP()
     end
 
     if Config.PB_EnemyESP then
-        for _, v in ipairs(workspace:GetChildren()) do
-            if v ~= Character and v:IsA("Model") and isPBMobAlive(v) and not State.ESPObjects[v] then
+        for _, v in ipairs(workspace:GetDescendants()) do
+            if v:IsA("Model") and v ~= Character and isPBMobAlive(v) and not State.ESPObjects[v] then
                 local hl = Instance.new("Highlight")
                 hl.Name = randomIdentifier(10)
                 hl.FillColor = Color3.fromRGB(180, 80, 255)
@@ -2425,7 +2759,7 @@ local function applyRemoveDamageText(state)
     end
 end
 
-if Config.RemoveDamageText then
+if Config.RemoveDamageText and CurrentGame == "AOTR" then
     task.spawn(function()
         PlayerGui:WaitForChild("Interface", 15)
         applyRemoveDamageText(true)
@@ -2433,7 +2767,7 @@ if Config.RemoveDamageText then
 end
 
 --//===========================================================================
---// DELTA MOBILE & PC CUSTOM GUI (MULTI-GAME HUB: AOT:R + PIXEL BLADE)
+--// DELTA MOBILE & PC CUSTOM GUI (STRICT GAME-ISOLATED TABS v3.2)
 --//===========================================================================
 
 local ScreenGui = Instance.new("ScreenGui")
@@ -2448,7 +2782,7 @@ FloatButton.Name = randomIdentifier(10)
 FloatButton.Size = UDim2.new(0, 56, 0, 56)
 FloatButton.Position = UDim2.new(0, 18, 0.5, -28)
 FloatButton.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
-FloatButton.Text = CurrentGame == "PixelBlade" and "🗡️\nPB" or "🛡️\nHUB"
+FloatButton.Text = CurrentGame == "PixelBlade" and "🗡️\nPB" or "🛡️\nAOT"
 FloatButton.TextColor3 = Color3.fromRGB(90, 230, 145)
 FloatButton.Font = Enum.Font.GothamBlack
 FloatButton.TextSize = 13
@@ -2500,7 +2834,9 @@ local TitleLabel = Instance.new("TextLabel")
 TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text = "🛡️ Delta Multi-Hub v3.0 | AOT:R + Pixel Blade"
+TitleLabel.Text = CurrentGame == "PixelBlade"
+    and "🗡️ Delta Hub v3.2 | Pixel Blade Edition"
+    or "⚔️ Delta Hub v3.2 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -2827,402 +3163,391 @@ local function addActionButton(parent, labelText, callback)
 end
 
 --//===========================================================================
---// BUILD TABS & CONTROLS (AOT:R + PIXEL BLADE + SHARED SECURITY)
+--// BUILD TABS & CONTROLS (STRICT PER-GAME ISOLATION: PIXEL BLADE vs AOT:R)
 --//===========================================================================
 
-local TabPBFarm = createTab("🗡️ Pixel Blade قتال", 1)
-local TabPBFish = createTab("🎣 Pixel صيد بالصنارة", 2)
-local TabPBLoot = createTab("🎁 Pixel صناديق وبوابات", 3)
-local TabFarm = createTab("⚔️ AOT:R الفارم", 4)
-local TabCombat = createTab("⚡ AOT:R المساعدات", 5)
-local TabMisc = createTab("🎲 AOT:R العائلات", 6)
-local TabSecurity = createTab("🛡️ الحماية (Anti-Ban)", 7)
-local TabESP = createTab("👁️ الرادار والفريمات", 8)
+local TabPBFarm, TabPBFish, TabPBLoot = nil, nil, nil
+local TabFarm, TabCombat, TabMisc = nil, nil, nil
 
--- Automatically open the detected game's main tab first!
 if CurrentGame == "PixelBlade" then
-    selectTab("🗡️ Pixel Blade قتال")
+    TabPBFarm = createTab("🗡️ الدنجن والقتال", 1)
+    TabPBFish = createTab("🎣 الصيد بالصنارة", 2)
+    TabPBLoot = createTab("🎁 الصناديق والبوابات", 3)
 else
-    selectTab("⚔️ AOT:R الفارم")
+    TabFarm = createTab("⚔️ الفارم والعمالقة", 1)
+    TabCombat = createTab("⚡ المهمات والتعبئة", 2)
+    TabMisc = createTab("🎲 العائلات والتنقل", 3)
+end
+
+local TabSecurity = createTab("🛡️ الحماية (Anti-Ban)", 4)
+local TabESP = createTab("👁️ الرادار والفريمات", 5)
+
+-- Automatically open the active game's first tab!
+if CurrentGame == "PixelBlade" then
+    selectTab("🗡️ الدنجن والقتال")
+else
+    selectTab("⚔️ الفارم والعمالقة")
 end
 
 -- ============================================================================
--- [PIXEL BLADE TAB 1: FARM & COMBAT]
+-- [GAME 2 ONLY: PIXEL BLADE TABS & CONTROLS]
 -- ============================================================================
-addSectionHeader(TabPBFarm, "🗡️ Pixel Blade - الفارم والقتال التلقائي")
+if CurrentGame == "PixelBlade" then
+    -- [PIXEL BLADE TAB 1: FARM & COMBAT]
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade - تفريم الدنجن والغارات والقتال")
 
-addToggle(TabPBFarm, "فارم الدنجن التلقائي (Auto Farm Dungeon)", Config.PB_AutoFarmDungeon, function(val)
-    Config.PB_AutoFarmDungeon = val
-    State.PB_EnteredBossRoom = false
-    if val then
-        applyPBTempBuffAndHeal()
-    end
-end)
-
-addToggle(TabPBFarm, "فارم الغارات التلقائي (Auto Farm Raids)", Config.PB_AutoFarmRaid, function(val)
-    Config.PB_AutoFarmRaid = val
-    if val then
-        applyPBTempBuffAndHeal()
-    end
-end)
-
-addToggle(TabPBFarm, "قتل جماعي تلقائي حولك (Kill Aura + Tornado)", Config.PB_KillAura, function(val)
-    Config.PB_KillAura = val
-end)
-
-addStepper(TabPBFarm, "مدى الـ Kill Aura", 15, 150, 5, Config.PB_KillAuraRange, function(val)
-    Config.PB_KillAuraRange = val
-end)
-
-addToggle(TabPBFarm, "تقوية الضرر الخارق + شفاء تلقائي (God Buff & Heal)", Config.PB_GodBuffAndHeal, function(val)
-    Config.PB_GodBuffAndHeal = val
-    if val then
-        applyPBTempBuffAndHeal()
-    end
-end)
-
-addToggle(TabPBFarm, "داش لا نهائي وإلغاء انتظار المهارات (Inf Dash & No CD)", Config.PB_InfDashAndNoCD, function(val)
-    Config.PB_InfDashAndNoCD = val
-end)
-
-addToggle(TabPBFarm, "تكسير الصناديق/الأغراض تلقائياً (Auto Breakables)", Config.PB_AutoBreakables, function(val)
-    Config.PB_AutoBreakables = val
-end)
-
-addSectionHeader(TabPBFarm, "🎯 تكبير هيت بوكس الأعداء (Hitbox Expander)")
-
-addToggle(TabPBFarm, "تكبير هيت بوكس الأعداء (Expand Enemy Hitbox)", Config.PB_ExpandHitbox, function(val)
-    Config.PB_ExpandHitbox = val
-end)
-
-addStepper(TabPBFarm, "حجم هيت بوكس الأعداء", 5, 80, 5, Config.PB_HitboxSize, function(val)
-    Config.PB_HitboxSize = val
-end)
-
--- ============================================================================
--- [PIXEL BLADE TAB 2: 🎣 AUTO FISHING (الصيد التلقائي بالصنارة)]
--- ============================================================================
-addSectionHeader(TabPBFish, "🎣 الصيد التلقائي بالصنارة في Pixel Blade")
-
-local FishStatusBox = Instance.new("TextLabel")
-FishStatusBox.Size = UDim2.new(1, 0, 0, 36)
-FishStatusBox.BackgroundColor3 = Color3.fromRGB(26, 36, 48)
-FishStatusBox.Text = "🎣 الحالة: متوقف | الأسماك المصطادة: 0"
-FishStatusBox.TextColor3 = Color3.fromRGB(110, 235, 255)
-FishStatusBox.Font = Enum.Font.GothamBold
-FishStatusBox.TextSize = 11
-FishStatusBox.TextWrapped = true
-FishStatusBox.Parent = TabPBFish
-
-local fishStatusCorner = Instance.new("UICorner")
-fishStatusCorner.CornerRadius = UDim.new(0, 6)
-fishStatusCorner.Parent = FishStatusBox
-
-task.spawn(function()
-    while State.Running do
-        task.wait(0.25)
-        if FishStatusBox and FishStatusBox.Parent then
-            FishStatusBox.Text = string.format(
-                "🎣 الحالة: %s | 🐟 تم صيد: %d",
-                tostring(State.PB_FishStatusText or "متوقف"),
-                tonumber(State.PB_FishCaughtCount) or 0
-            )
+    addToggle(TabPBFarm, "فارم الدنجن التلقائي الذكي (Auto Farm Dungeon)", Config.PB_AutoFarmDungeon, function(val)
+        Config.PB_AutoFarmDungeon = val
+        State.PB_EnteredBossRoom = false
+        if not val then
+            State.PB_ActiveTargetCFrame = nil
+        else
+            applyPBTempBuffAndHeal()
         end
-    end
-end)
-
-addToggle(TabPBFish, "تفعيل الصيد التلقائي بالصنارة (Auto Fish On/Off)", Config.PB_AutoFish, function(val)
-    Config.PB_AutoFish = val
-    if not val and VirtualInputManager then
-        pcall(function()
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-        end)
-    end
-end)
-
-addToggle(TabPBFish, "تجهيز الصنارة والتفاعل مع نقطة الصيد تلقائياً", Config.PB_AutoEquipRod, function(val)
-    Config.PB_AutoEquipRod = val
-end)
-
-addToggle(TabPBFish, "حل ميني جيم الصيد تلقائياً (دائرة خضراء + سحب أزرق)", Config.PB_AutoFishMinigame, function(val)
-    Config.PB_AutoFishMinigame = val
-end)
-
-addSectionHeader(TabPBFish, "⏱️ إعدادات توقيت الصيد والميني جيم (Timings)")
-
-addStepper(TabPBFish, "مدة ضغط رمي الصنارة بالثواني (Cast Hold E)", 0.2, 3.0, 0.1, Config.PB_FishCastHold, function(val)
-    Config.PB_FishCastHold = val
-end)
-
-addStepper(TabPBFish, "مدة ضغط الدائرة الخضراء الأولى (First Green Hold)", 0.3, 3.0, 0.1, Config.PB_FishGreenHold, function(val)
-    Config.PB_FishGreenHold = val
-end)
-
-addStepper(TabPBFish, "مدة ضغط الدوائر الخضراء التالية (Follow-up Hold)", 0.2, 3.0, 0.1, Config.PB_FishFollowGreenHold, function(val)
-    Config.PB_FishFollowGreenHold = val
-end)
-
-addStepper(TabPBFish, "عدد النقرات السريعة عند الدائرة الزرقاء (Blue Taps)", 5, 25, 1, Config.PB_FishTapCount, function(val)
-    Config.PB_FishTapCount = val
-end)
-
-addStepper(TabPBFish, "مهلة إعادة الرمي التلقائي بالثواني (Timeout)", 8, 30, 1, Config.PB_FishTimeout, function(val)
-    Config.PB_FishTimeout = val
-end)
-
-addActionButton(TabPBFish, "🎣 رمي الصنارة الآن يدوياً (Cast Rod Once)", function()
-    task.spawn(function()
-        local st = pbDetectFishingMinigameState(State.HubScreenGui)
-        pbHoldFishingInput(Config.PB_FishCastHold, st.mobileBtn, "cast")
     end)
-end)
 
-addActionButton(TabPBFish, "🔍 فحص واجهة وريموتات الصيد القريبة (Scan Fishing)", function()
-    pcall(function()
-        local foundList = {}
-        local pbRem = getPBRemotes()
-        if pbRem then
-            for _, r in ipairs(pbRem:GetChildren()) do
-                if hasFishingKeyword(r.Name) then
-                    table.insert(foundList, "Remote:" .. r.Name)
-                end
+    addToggle(TabPBFarm, "فارم الغارات التلقائي (Auto Farm Raids)", Config.PB_AutoFarmRaid, function(val)
+        Config.PB_AutoFarmRaid = val
+        if not val then
+            State.PB_ActiveTargetCFrame = nil
+        else
+            applyPBTempBuffAndHeal()
+        end
+    end)
+
+    addToggle(TabPBFarm, "قتل جماعي تلقائي حولك (Kill Aura + Tornado)", Config.PB_KillAura, function(val)
+        Config.PB_KillAura = val
+    end)
+
+    addStepper(TabPBFarm, "مدى الـ Kill Aura", 15, 250, 5, Config.PB_KillAuraRange, function(val)
+        Config.PB_KillAuraRange = val
+    end)
+
+    addToggle(TabPBFarm, "تقوية الضرر الخارق + شفاء تلقائي (God Buff & Heal)", Config.PB_GodBuffAndHeal, function(val)
+        Config.PB_GodBuffAndHeal = val
+        if val then
+            applyPBTempBuffAndHeal()
+        end
+    end)
+
+    addToggle(TabPBFarm, "داش لا نهائي وإلغاء انتظار المهارات (Inf Dash & No CD)", Config.PB_InfDashAndNoCD, function(val)
+        Config.PB_InfDashAndNoCD = val
+    end)
+
+    addToggle(TabPBFarm, "تكسير الصناديق/الأغراض تلقائياً (Auto Breakables)", Config.PB_AutoBreakables, function(val)
+        Config.PB_AutoBreakables = val
+    end)
+
+    addSectionHeader(TabPBFarm, "🎯 تكبير هيت بوكس الأعداء (Hitbox Expander)")
+
+    addToggle(TabPBFarm, "تكبير هيت بوكس الأعداء (Expand Enemy Hitbox)", Config.PB_ExpandHitbox, function(val)
+        Config.PB_ExpandHitbox = val
+    end)
+
+    addStepper(TabPBFarm, "حجم هيت بوكس الأعداء", 5, 80, 5, Config.PB_HitboxSize, function(val)
+        Config.PB_HitboxSize = val
+    end)
+
+    -- [PIXEL BLADE TAB 2: 🎣 ULTRA-FAST AUTO FISHING (الصيد التلقائي السريع بالصنارة)]
+    addSectionHeader(TabPBFish, "🎣 الصيد التلقائي السريع بالصنارة (Turbo v3.2)")
+
+    local FishStatusBox = Instance.new("TextLabel")
+    FishStatusBox.Size = UDim2.new(1, 0, 0, 36)
+    FishStatusBox.BackgroundColor3 = Color3.fromRGB(26, 36, 48)
+    FishStatusBox.Text = "🎣 الحالة: متوقف | الأسماك المصطادة: 0"
+    FishStatusBox.TextColor3 = Color3.fromRGB(110, 235, 255)
+    FishStatusBox.Font = Enum.Font.GothamBold
+    FishStatusBox.TextSize = 11
+    FishStatusBox.TextWrapped = true
+    FishStatusBox.Parent = TabPBFish
+
+    local fishStatusCorner = Instance.new("UICorner")
+    fishStatusCorner.CornerRadius = UDim.new(0, 6)
+    fishStatusCorner.Parent = FishStatusBox
+
+    task.spawn(function()
+        while State.Running do
+            task.wait(0.2)
+            if FishStatusBox and FishStatusBox.Parent then
+                FishStatusBox.Text = string.format(
+                    "🎣 الحالة: %s | 🐟 تم صيد: %d",
+                    tostring(State.PB_FishStatusText or "متوقف"),
+                    tonumber(State.PB_FishCaughtCount) or 0
+                )
             end
         end
-        local pr = pbFindFishingPrompt()
-        if pr then
-            table.insert(foundList, "Prompt:" .. tostring(pr.ActionText ~= "" and pr.ActionText or pr.Name))
-        end
-        local rod = pbEquipFishingRod()
-        if rod then
-            table.insert(foundList, "Tool:" .. rod.Name)
-        end
-        if #foundList > 0 then
-            State.PB_FishStatusText = "✅ تم كشف: " .. table.concat(foundList, " | ")
-        else
-            State.PB_FishStatusText = "ℹ️ قف بجانب الماء/نقطة الصيد ثم فعّل الصيد التلقائي"
+    end)
+
+    addToggle(TabPBFish, "تفعيل الصيد التلقائي التيربو (Turbo Auto Fish)", Config.PB_AutoFish, function(val)
+        Config.PB_AutoFish = val
+        if not val then
+            pbReleaseEUp(nil, State.PB_CachedFishPrompt)
         end
     end)
-end)
 
--- ============================================================================
--- [PIXEL BLADE TAB 2: UPGRADES, CHESTS, WISHES & PORTALS]
--- ============================================================================
-addSectionHeader(TabPBLoot, "⚡ الترقيات والصناديق والأمنيات (Pixel Blade)")
+    addToggle(TabPBFish, "تجهيز الصنارة والتفاعل مع نقطة الصيد تلقائياً", Config.PB_AutoEquipRod, function(val)
+        Config.PB_AutoEquipRod = val
+    end)
 
-addToggle(TabPBLoot, "اختيار الترقية تلقائياً بالدنجن (Auto Pick Upgrade)", Config.PB_AutoUpgrade, function(val)
-    Config.PB_AutoUpgrade = val
-end)
+    addToggle(TabPBFish, "حل ميني جيم الصيد الفوري (60FPS دائرة خضراء + سحب أزرق)", Config.PB_AutoFishMinigame, function(val)
+        Config.PB_AutoFishMinigame = val
+    end)
 
-addToggle(TabPBLoot, "إخفاء نافذة الترقية المزعجة (Hide Upgrade Popup)", Config.PB_HideUpgradePopup, function(val)
-    Config.PB_HideUpgradePopup = val
-end)
+    addToggle(TabPBFish, "الدورة الذكية السريعة (Smart Turbo Cycle بدون انتظار)", Config.PB_FishSmartCycle, function(val)
+        Config.PB_FishSmartCycle = val
+    end)
 
-addToggle(TabPBLoot, "فتح جميع الصناديق بالحقيبة تلقائياً (Auto Open Chests)", Config.PB_AutoOpenChests, function(val)
-    Config.PB_AutoOpenChests = val
-end)
+    addSectionHeader(TabPBFish, "⏱️ إعدادات سرعة الصيد التيربو (Turbo Timings)")
 
-addToggle(TabPBLoot, "فتح الأمنيات تلقائياً (Auto Open Wishes)", Config.PB_AutoOpenWishes, function(val)
-    Config.PB_AutoOpenWishes = val
-end)
+    addStepper(TabPBFish, "مدة ضغط رمي الصنارة (Cast Hold E)", 0.2, 2.0, 0.1, Config.PB_FishCastHold, function(val)
+        Config.PB_FishCastHold = val
+    end)
 
-addToggle(TabPBLoot, "استلام المهام اليومية تلقائياً (Auto Claim Quests)", Config.PB_AutoClaimQuests, function(val)
-    Config.PB_AutoClaimQuests = val
-end)
+    addStepper(TabPBFish, "مدة ضغط الدائرة الخضراء (Green Hold E)", 0.3, 2.5, 0.1, Config.PB_FishGreenHold, function(val)
+        Config.PB_FishGreenHold = val
+    end)
 
-addToggle(TabPBLoot, "استلام الإنجازات تلقائياً (Auto Claim Achievements)", Config.PB_AutoClaimAchievements, function(val)
-    Config.PB_AutoClaimAchievements = val
-end)
+    addStepper(TabPBFish, "عدد نقرات السحب السريعة (Turbo Reel Taps)", 6, 30, 2, Config.PB_FishTapCount, function(val)
+        Config.PB_FishTapCount = val
+    end)
 
-addSectionHeader(TabPBLoot, "🌀 دخول البوابات التلقائي (Auto Dungeon Portal)")
+    addStepper(TabPBFish, "مهلة إعادة الرمي السريع بالثواني (Fast Timeout)", 3, 15, 1, Config.PB_FishTimeout, function(val)
+        Config.PB_FishTimeout = val
+    end)
 
-addCycleButton(TabPBLoot, "اختيار البوابة (Select Portal)", { "Grasslands", "AncientSands" }, Config.PB_SelectedDungeon, function(opt)
-    Config.PB_SelectedDungeon = opt
-end)
-
-addCycleButton(TabPBLoot, "اختيار الصعوبة (Difficulty)", { "Normal", "Heroic", "Nightmare" }, Config.PB_SelectedDifficulty, function(opt)
-    Config.PB_SelectedDifficulty = opt
-end)
-
-addToggle(TabPBLoot, "دخول البوابة تلقائياً (Auto Join Portal)", Config.PB_AutoJoinPortal, function(val)
-    Config.PB_AutoJoinPortal = val
-end)
-
-addActionButton(TabPBLoot, "🏠 العودة إلى اللوبي في Pixel Blade (Return to Lobby)", function()
-    local char = LocalPlayer.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if hum then
-        hum.Health = 0
-    end
-end)
-
--- ============================================================================
--- [AOT:R TAB 3: AUTO FARM]
--- ============================================================================
-addSectionHeader(TabFarm, "⚔️ AOT:R - قتل العمالقة بالسيوف (Auto Kill Blades)")
-
-addToggle(TabFarm, "تفعيل القتل التلقائي (Auto Kill Titans)", Config.AutoKillBlades, function(val)
-    Config.AutoKillBlades = val
-    if val then
-        State.FarmStartTimestamp = tick()
-    elseif HumanoidRootPart then
-        HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
-    end
-end)
-
-addCycleButton(TabFarm, "طريقة الحركة (Move Mode)", { "Teleportation", "Gliding" }, Config.MoveMode, function(opt)
-    Config.MoveMode = opt
-end)
-
-addStepper(TabFarm, "تأخير البدء بالثواني (Start Delay)", 0, 30, 1, Config.StartDelay, function(val)
-    Config.StartDelay = val
-end)
-
-addStepper(TabFarm, "ارتفاع الطيران (Float Height)", 50, 350, 25, Config.FloatHeight, function(val)
-    Config.FloatHeight = val
-end)
-
-addStepper(TabFarm, "سرعة الانزلاق (Glide Speed)", 100, 500, 25, Config.GlideSpeed, function(val)
-    Config.GlideSpeed = val
-end)
-
-addSectionHeader(TabFarm, "رماح الرعد (Thunder Spears Farm)")
-
-addToggle(TabFarm, "فارم رماح الرعد (Auto Thunder Spears)", Config.AutoFarmTS, function(val)
-    Config.AutoFarmTS = val
-    if not val then
-        State.IsTSHovering = false
-        State.TSHoverPos = nil
-    end
-end)
-
-addCycleButton(TabFarm, "وضع رماح الرعد (TS Mode)", { "Safe", "Risk" }, Config.TSKillMode, function(opt)
-    Config.TSKillMode = opt
-end)
-
-addSectionHeader(TabFarm, "تكبير نقطة الضعف والمهارات (Hitbox & Skills)")
-
-addToggle(TabFarm, "تكبير رقبة العملاق (Expand Nape Hitbox)", Config.ExpandNapes, function(val)
-    Config.ExpandNapes = val
-    pcall(updateAllNapes)
-end)
-
-addStepper(TabFarm, "حجم الهيت بوكس (Nape Size)", 50, 1500, 50, Config.NapeSize, function(val)
-    Config.NapeSize = val
-    if Config.ExpandNapes then
-        pcall(updateAllNapes)
-    end
-end)
-
-addToggle(TabFarm, "تفعيل المهارات تلقائياً (Titan Ripper)", Config.TitanRipper, function(val)
-    Config.TitanRipper = val
-end)
-
--- ============================================================================
--- [AOT:R TAB 4: COMBAT & MISSIONS]
--- ============================================================================
-addSectionHeader(TabCombat, "الذخيرة والتعبئة (شامل أوتغارد وجميع الخرائط)")
-
-addToggle(TabCombat, "تبديل السيوف تلقائياً (Auto Reload Blades)", Config.AutoReloadBlades, function(val)
-    Config.AutoReloadBlades = val
-end)
-
-addToggle(TabCombat, "إعادة التعبئة التلقائية (Auto Refill All Maps)", Config.AutoRefill, function(val)
-    Config.AutoRefill = val
-end)
-
-addActionButton(TabCombat, "🔄 الانتقال لنقطة التعبئة والتعبئة فوراً (TP & Refill Now)", function()
-    task.spawn(executeFullStationRefill)
-end)
-
-addToggle(TabCombat, "الهروب من مسكة العملاق (Auto Escape Grab)", Config.AutoEscapeGrab, function(val)
-    Config.AutoEscapeGrab = val
-end)
-
-addSectionHeader(TabCombat, "المهمات والغارات (Missions & Raids)")
-
-addToggle(TabCombat, "إعادة المهمة/الغارة تلقائياً (Auto Retry)", Config.AutoRetry, function(val)
-    Config.AutoRetry = val
-end)
-
-addToggle(TabCombat, "تخطي المشاهد السينمائية (Auto Skip Cutscene)", Config.AutoSkipCutscene, function(val)
-    Config.AutoSkipCutscene = val
-end)
-
-addToggle(TabCombat, "فتح الصندوق المجاني (Auto Free Chest)", Config.AutoFreeChest, function(val)
-    Config.AutoFreeChest = val
-end)
-
-addToggle(TabCombat, "فتح الصندوق المميز (Auto Premium Chest)", Config.AutoPremiumChest, function(val)
-    Config.AutoPremiumChest = val
-end)
-
-addToggle(TabCombat, "إشعارات القتل على الشاشة (Kill Notifications)", Config.KillNotifications, function(val)
-    Config.KillNotifications = val
-end)
-
--- ============================================================================
--- [AOT:R TAB 5: FAMILY ROLL & TELEPORT]
--- ============================================================================
-addSectionHeader(TabMisc, "لفات العائلات في القائمة الرئيسية (AOT:R Family Roll)")
-
-addToggle(TabMisc, "لف العائلات تلقائياً (Auto Family Roll)", Config.AutoRollFamily, function(val)
-    Config.AutoRollFamily = val
-end)
-
-addToggle(TabMisc, "التوقف تلقائياً عند (Yeager / Ackerman / Reiss / Fritz)", Config.StopOnRareFamily, function(val)
-    Config.StopOnRareFamily = val
-end)
-
-addStepper(TabMisc, "سرعة اللف بالثواني (Roll Delay)", 0.2, 5, 0.2, Config.RollInterval, function(val)
-    Config.RollInterval = val
-end)
-
-addActionButton(TabMisc, "🎲 لف العائلة مرة واحدة الآن (Roll Once)", function()
-    refreshRemotes()
-    if Remotes.GET then
+    addActionButton(TabPBFish, "🎣 رمي الصنارة الآن يدوياً (Cast Rod Once)", function()
         task.spawn(function()
-            pcall(function()
-                Remotes.GET:InvokeServer("Family", "Roll")
-            end)
+            local st = pbDetectFishingMinigameState(State.HubScreenGui)
+            pbReactiveHoldE(Config.PB_FishCastHold, st.mobileBtn, "cast", false)
         end)
-    end
-    local btn = findFamilyRollButton()
-    if btn then
-        smartClickButton(btn, 0, 0)
-    end
-end)
+    end)
 
-addSectionHeader(TabMisc, "التنقل السريع (AOT:R Quick Teleport)")
+    addActionButton(TabPBFish, "⚡ تنفيذ نقرات سحب تيربو فوراً (Test Turbo Reel)", function()
+        task.spawn(function()
+            local st = pbDetectFishingMinigameState(State.HubScreenGui)
+            pbTurboTapE(Config.PB_FishTapCount, Config.PB_FishTapInterval, st.mobileBtn)
+        end)
+    end)
 
-addActionButton(TabMisc, "🏠 الانتقال إلى لوبي AOT:R (Return to Lobby)", function()
-    saveConfig()
-    setupAutoExecuteOnTeleport()
-    TeleportService:Teleport(AOTR_PLACE_IDS.Lobby, LocalPlayer)
-end)
+    -- [PIXEL BLADE TAB 3: UPGRADES, CHESTS, WISHES & PORTALS]
+    addSectionHeader(TabPBLoot, "⚡ الترقيات والصناديق والأمنيات (Pixel Blade)")
 
-addActionButton(TabMisc, "🎮 الانتقال للقائمة الرئيسية AOT:R (Main Menu)", function()
-    saveConfig()
-    setupAutoExecuteOnTeleport()
-    TeleportService:Teleport(AOTR_PLACE_IDS.MainMenu, LocalPlayer)
-end)
+    addToggle(TabPBLoot, "اختيار الترقية تلقائياً بالدنجن (Auto Pick Upgrade)", Config.PB_AutoUpgrade, function(val)
+        Config.PB_AutoUpgrade = val
+    end)
+
+    addToggle(TabPBLoot, "إخفاء نافذة الترقية المزعجة (Hide Upgrade Popup)", Config.PB_HideUpgradePopup, function(val)
+        Config.PB_HideUpgradePopup = val
+    end)
+
+    addToggle(TabPBLoot, "فتح جميع الصناديق بالحقيبة تلقائياً (Auto Open Chests)", Config.PB_AutoOpenChests, function(val)
+        Config.PB_AutoOpenChests = val
+    end)
+
+    addToggle(TabPBLoot, "فتح الأمنيات تلقائياً (Auto Open Wishes)", Config.PB_AutoOpenWishes, function(val)
+        Config.PB_AutoOpenWishes = val
+    end)
+
+    addToggle(TabPBLoot, "استلام المهام اليومية تلقائياً (Auto Claim Quests)", Config.PB_AutoClaimQuests, function(val)
+        Config.PB_AutoClaimQuests = val
+    end)
+
+    addToggle(TabPBLoot, "استلام الإنجازات تلقائياً (Auto Claim Achievements)", Config.PB_AutoClaimAchievements, function(val)
+        Config.PB_AutoClaimAchievements = val
+    end)
+
+    addSectionHeader(TabPBLoot, "🌀 دخول البوابات التلقائي (Auto Dungeon Portal)")
+
+    addCycleButton(TabPBLoot, "اختيار البوابة (Select Portal)", { "Grasslands", "AncientSands" }, Config.PB_SelectedDungeon, function(opt)
+        Config.PB_SelectedDungeon = opt
+    end)
+
+    addCycleButton(TabPBLoot, "اختيار الصعوبة (Difficulty)", { "Normal", "Heroic", "Nightmare" }, Config.PB_SelectedDifficulty, function(opt)
+        Config.PB_SelectedDifficulty = opt
+    end)
+
+    addToggle(TabPBLoot, "دخول البوابة تلقائياً (Auto Join Portal)", Config.PB_AutoJoinPortal, function(val)
+        Config.PB_AutoJoinPortal = val
+    end)
+
+    addActionButton(TabPBLoot, "🏠 العودة إلى اللوبي في Pixel Blade (Return to Lobby)", function()
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.Health = 0
+        end
+    end)
+end
 
 -- ============================================================================
--- [SHARED TAB 6: 🛡️ SECURITY & ANTI-BAN]
+-- [GAME 1 ONLY: ATTACK ON TITAN: REVOLUTION TABS & CONTROLS]
 -- ============================================================================
-addSectionHeader(TabSecurity, "🛡️ أنظمة الحماية المشتركة وحفظ الإعدادات")
+if CurrentGame == "AOTR" then
+    -- [AOT:R TAB 1: AUTO FARM]
+    addSectionHeader(TabFarm, "⚔️ AOT:R - قتل العمالقة بالسيوف (Auto Kill Blades)")
+
+    addToggle(TabFarm, "تفعيل القتل التلقائي (Auto Kill Titans)", Config.AutoKillBlades, function(val)
+        Config.AutoKillBlades = val
+        if val then
+            State.FarmStartTimestamp = tick()
+        elseif HumanoidRootPart then
+            HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+        end
+    end)
+
+    addCycleButton(TabFarm, "طريقة الحركة (Move Mode)", { "Teleportation", "Gliding" }, Config.MoveMode, function(opt)
+        Config.MoveMode = opt
+    end)
+
+    addStepper(TabFarm, "تأخير البدء بالثواني (Start Delay)", 0, 30, 1, Config.StartDelay, function(val)
+        Config.StartDelay = val
+    end)
+
+    addStepper(TabFarm, "ارتفاع الطيران (Float Height)", 50, 350, 25, Config.FloatHeight, function(val)
+        Config.FloatHeight = val
+    end)
+
+    addStepper(TabFarm, "سرعة الانزلاق (Glide Speed)", 100, 500, 25, Config.GlideSpeed, function(val)
+        Config.GlideSpeed = val
+    end)
+
+    addSectionHeader(TabFarm, "رماح الرعد (Thunder Spears Farm)")
+
+    addToggle(TabFarm, "فارم رماح الرعد (Auto Thunder Spears)", Config.AutoFarmTS, function(val)
+        Config.AutoFarmTS = val
+        if not val then
+            State.IsTSHovering = false
+            State.TSHoverPos = nil
+        end
+    end)
+
+    addCycleButton(TabFarm, "وضع رماح الرعد (TS Mode)", { "Safe", "Risk" }, Config.TSKillMode, function(opt)
+        Config.TSKillMode = opt
+    end)
+
+    addSectionHeader(TabFarm, "تكبير نقطة الضعف والمهارات (Hitbox & Skills)")
+
+    addToggle(TabFarm, "تكبير رقبة العملاق (Expand Nape Hitbox)", Config.ExpandNapes, function(val)
+        Config.ExpandNapes = val
+        pcall(updateAllNapes)
+    end)
+
+    addStepper(TabFarm, "حجم الهيت بوكس (Nape Size)", 50, 1500, 50, Config.NapeSize, function(val)
+        Config.NapeSize = val
+        if Config.ExpandNapes then
+            pcall(updateAllNapes)
+        end
+    end)
+
+    addToggle(TabFarm, "تفعيل المهارات تلقائياً (Titan Ripper)", Config.TitanRipper, function(val)
+        Config.TitanRipper = val
+    end)
+
+    -- [AOT:R TAB 2: COMBAT & MISSIONS]
+    addSectionHeader(TabCombat, "الذخيرة والتعبئة (شامل أوتغارد وجميع الخرائط)")
+
+    addToggle(TabCombat, "تبديل السيوف تلقائياً (Auto Reload Blades)", Config.AutoReloadBlades, function(val)
+        Config.AutoReloadBlades = val
+    end)
+
+    addToggle(TabCombat, "إعادة التعبئة التلقائية (Auto Refill All Maps)", Config.AutoRefill, function(val)
+        Config.AutoRefill = val
+    end)
+
+    addActionButton(TabCombat, "🔄 الانتقال لنقطة التعبئة والتعبئة فوراً (TP & Refill Now)", function()
+        task.spawn(executeFullStationRefill)
+    end)
+
+    addToggle(TabCombat, "الهروب من مسكة العملاق (Auto Escape Grab)", Config.AutoEscapeGrab, function(val)
+        Config.AutoEscapeGrab = val
+    end)
+
+    addSectionHeader(TabCombat, "المهمات والغارات (Missions & Raids)")
+
+    addToggle(TabCombat, "إعادة المهمة/الغارة تلقائياً (Auto Retry)", Config.AutoRetry, function(val)
+        Config.AutoRetry = val
+    end)
+
+    addToggle(TabCombat, "تخطي المشاهد السينمائية (Auto Skip Cutscene)", Config.AutoSkipCutscene, function(val)
+        Config.AutoSkipCutscene = val
+    end)
+
+    addToggle(TabCombat, "فتح الصندوق المجاني (Auto Free Chest)", Config.AutoFreeChest, function(val)
+        Config.AutoFreeChest = val
+    end)
+
+    addToggle(TabCombat, "فتح الصندوق المميز (Auto Premium Chest)", Config.AutoPremiumChest, function(val)
+        Config.AutoPremiumChest = val
+    end)
+
+    addToggle(TabCombat, "إشعارات القتل على الشاشة (Kill Notifications)", Config.KillNotifications, function(val)
+        Config.KillNotifications = val
+    end)
+
+    -- [AOT:R TAB 3: FAMILY ROLL & TELEPORT]
+    addSectionHeader(TabMisc, "لفات العائلات في القائمة الرئيسية (AOT:R Family Roll)")
+
+    addToggle(TabMisc, "لف العائلات تلقائياً (Auto Family Roll)", Config.AutoRollFamily, function(val)
+        Config.AutoRollFamily = val
+    end)
+
+    addToggle(TabMisc, "التوقف تلقائياً عند (Yeager / Ackerman / Reiss / Fritz)", Config.StopOnRareFamily, function(val)
+        Config.StopOnRareFamily = val
+    end)
+
+    addStepper(TabMisc, "سرعة اللف بالثواني (Roll Delay)", 0.2, 5, 0.2, Config.RollInterval, function(val)
+        Config.RollInterval = val
+    end)
+
+    addActionButton(TabMisc, "🎲 لف العائلة مرة واحدة الآن (Roll Once)", function()
+        refreshRemotes()
+        if Remotes.GET then
+            task.spawn(function()
+                pcall(function()
+                    Remotes.GET:InvokeServer("Family", "Roll")
+                end)
+            end)
+        end
+        local btn = findFamilyRollButton()
+        if btn then
+            smartClickButton(btn, 0, 0)
+        end
+    end)
+
+    addSectionHeader(TabMisc, "التنقل السريع (AOT:R Quick Teleport)")
+
+    addActionButton(TabMisc, "🏠 الانتقال إلى لوبي AOT:R (Return to Lobby)", function()
+        saveConfig()
+        setupAutoExecuteOnTeleport()
+        TeleportService:Teleport(AOTR_PLACE_IDS.Lobby, LocalPlayer)
+    end)
+
+    addActionButton(TabMisc, "🎮 الانتقال للقائمة الرئيسية AOT:R (Main Menu)", function()
+        saveConfig()
+        setupAutoExecuteOnTeleport()
+        TeleportService:Teleport(AOTR_PLACE_IDS.MainMenu, LocalPlayer)
+    end)
+end
+
+-- ============================================================================
+-- [TAB 4: 🛡️ SECURITY & ANTI-BAN (GAME-AWARE)]
+-- ============================================================================
+addSectionHeader(TabSecurity, "🛡️ أنظمة الحماية وحفظ الإعدادات")
 
 addToggle(TabSecurity, "تشغيل السكربت والإعدادات تلقائياً بالغارة/الدنجن القادم", Config.AutoExecuteOnTeleport, function(val)
     Config.AutoExecuteOnTeleport = val
     if val then setupAutoExecuteOnTeleport() end
 end)
 
-addToggle(TabSecurity, "حارس وقت مهمة AOT:R (ينتظر 20ث قبل قتل آخر عملاق)", Config.SafeMissionTimerGuard, function(val)
-    Config.SafeMissionTimerGuard = val
-end)
+if CurrentGame == "AOTR" then
+    addToggle(TabSecurity, "حارس وقت مهمة AOT:R (ينتظر 20ث قبل قتل آخر عملاق)", Config.SafeMissionTimerGuard, function(val)
+        Config.SafeMissionTimerGuard = val
+    end)
 
-addStepper(TabSecurity, "الحد الآمن لإنهاء المهمة (ثانية)", 17, 45, 1, Config.MinSafeMissionSeconds, function(val)
-    Config.MinSafeMissionSeconds = val
-end)
+    addStepper(TabSecurity, "الحد الآمن لإنهاء المهمة (ثانية)", 17, 45, 1, Config.MinSafeMissionSeconds, function(val)
+        Config.MinSafeMissionSeconds = val
+    end)
+end
 
 addToggle(TabSecurity, "منع الطرد من الكلاينت (Anti-Kick Hook)", Config.AntiKick, function(val)
     Config.AntiKick = val
@@ -3265,12 +3590,9 @@ addActionButton(TabSecurity, "🚨 زر الطوارئ: إيقاف كل التف
     Config.PB_AutoFish = false
     State.IsTSHovering = false
     State.TSHoverPos = nil
+    State.PB_ActiveTargetCFrame = nil
     saveConfig()
-    pcall(function()
-        if VirtualInputManager then
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-        end
-    end)
+    pbReleaseEUp(nil, State.PB_CachedFishPrompt)
     pcall(updateAllNapes)
     pcall(clearESP)
     if HumanoidRootPart then
@@ -3297,31 +3619,35 @@ addActionButton(TabSecurity, "❌ إغلاق وحذف السكربت بالكا�
 end)
 
 -- ============================================================================
--- [SHARED TAB 7: ESP & PERFORMANCE]
+-- [TAB 5: ESP & PERFORMANCE (GAME-AWARE)]
 -- ============================================================================
 addSectionHeader(TabESP, "الرادار المخفي (Stealth ESP)")
 
-addToggle(TabESP, "كشف أعداء Pixel Blade (Pixel Blade Enemy ESP)", Config.PB_EnemyESP, function(val)
-    Config.PB_EnemyESP = val
-    if not val then clearESP() else pcall(updateESP) end
-end)
+if CurrentGame == "PixelBlade" then
+    addToggle(TabESP, "كشف أعداء Pixel Blade (Enemy Highlight ESP)", Config.PB_EnemyESP, function(val)
+        Config.PB_EnemyESP = val
+        if not val then clearESP() else pcall(updateESP) end
+    end)
+else
+    addToggle(TabESP, "كشف عمالقة AOT:R (Titan Highlight ESP)", Config.TitanESP, function(val)
+        Config.TitanESP = val
+        if not val then clearESP() else pcall(updateESP) end
+    end)
 
-addToggle(TabESP, "كشف عمالقة AOT:R (Titan Highlight ESP)", Config.TitanESP, function(val)
-    Config.TitanESP = val
-    if not val then clearESP() else pcall(updateESP) end
-end)
-
-addToggle(TabESP, "كشف نقاط التعبئة AOT:R (Refill Station ESP)", Config.RefillESP, function(val)
-    Config.RefillESP = val
-    if not val then clearESP() else pcall(updateESP) end
-end)
+    addToggle(TabESP, "كشف نقاط التعبئة AOT:R (Refill Station ESP)", Config.RefillESP, function(val)
+        Config.RefillESP = val
+        if not val then clearESP() else pcall(updateESP) end
+    end)
+end
 
 addSectionHeader(TabESP, "تحسين الأداء والفريمات (FPS & Visuals)")
 
-addToggle(TabESP, "إخفاء أرقام الضرر (Remove Damage Text)", Config.RemoveDamageText, function(val)
-    Config.RemoveDamageText = val
-    applyRemoveDamageText(val)
-end)
+if CurrentGame == "AOTR" then
+    addToggle(TabESP, "إخفاء أرقام الضرر (Remove Damage Text)", Config.RemoveDamageText, function(val)
+        Config.RemoveDamageText = val
+        applyRemoveDamageText(val)
+    end)
+end
 
 addActionButton(TabESP, "🚀 تحسين الفريمات للجوال (FPS Boost)", function()
     pcall(function()
@@ -3366,10 +3692,9 @@ local function cleanupScript()
     Config.PB_AutoFarmRaid = false
     Config.PB_KillAura = false
     Config.PB_AutoFish = false
+    State.PB_ActiveTargetCFrame = nil
+    pbReleaseEUp(nil, State.PB_CachedFishPrompt)
     pcall(function()
-        if VirtualInputManager then
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-        end
         if HumanoidRootPart then HumanoidRootPart.Anchored = false end
     end)
     pcall(updateAllNapes)
@@ -3399,4 +3724,4 @@ if getgenv then
     getgenv().AOTR_Delta_Cleanup = cleanupScript
 end
 
-print("[🛡️ Delta Multi-Hub v3.0] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v3.2] Loaded! Active Game Detected: " .. tostring(CurrentGame))
