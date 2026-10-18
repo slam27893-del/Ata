@@ -1,31 +1,32 @@
-# 🛡️ Delta Multi-Game Hub [PROTECTED v3.4 - Turbo & Game-Isolated Edition]
+# 🛡️ Delta Multi-Game Hub [PROTECTED v3.5 - Turbo & Game-Isolated Edition]
 **Attack on Titan: Revolution (AOT:R) + Pixel Blade**
 
 سكربت شامل ومحمي بالكامل لتطبيق **Delta Executor** (جوال Android / iOS والكمبيوتر PC) يدعم لعبتين في رابط واحد مع **فصل كامل للواجهة والتابات حسب الماب النشط**:
-1. **Pixel Blade** (تفريم الدنجن الشامل بدون التعليق عند الصندوق الوردي أو `ShroomKnight` + قراءة ضرر السلاح الفعلي `plrStats.wpnStats.Dmg` مع بف `550,000,000%` لتجاوز حماية السيرفر وقتل الأعداء فوراً + تكسير الصناديق الخشبية `Breakables` عن بُعد + فتح جميع الصناديق `Auto Open All Chests` بدون حظر/تأخير + الصيد التلقائي السريع التيربو بالصنارة `Turbo Auto Fishing 60FPS`).
+1. **Pixel Blade** (تفريم الدنجن الشامل لجميع الغرف والمراحل `Rooms 1..25` + قتل الأعداء والزعماء بضربات متعددة إيجابية + تكسير الصناديق والجرار `Breakables` فعلياً بدون شفائها بالخطأ + فتح جميع الصناديق داخل الدنجن وفي الحقيبة `Auto Open All Chests` + الصيد التلقائي السريع التيربو بالصنارة `Turbo Auto Fishing 60FPS`).
 2. **Attack on Titan: Revolution (AOT:R)** (جميع الخرائط والغارات شاملة خريطة أوتغارد Utgard + لف العائلات + رماح الرعد + الحماية من الباند).
 
 ---
 
-## ✨ التحديثات والإصلاحات الجديدة في الإصدار v3.4
+## ✨ التحديثات والإصلاحات الجذرية في الإصدار v3.5
 
-1. **🚫 إصلاح التعليق عند الصندوق الوردي / المجسمات في الغرفة الأولى (`Anti-Chest/Prop Lock`)**:
-   - في الصورة المرفقة، كان السكربت يلتقط الصندوق الوردي في الغرفة الأولى (الذي يحتوي على `Root` و `Top` و `Humanoid`) كأنه عدو بسبب `FindFirstChild("Root")`، فيثبت اللاعب أمامه ولا ينتقل للوحوش في الغرفة التالية.
-   - تم حظر استهداف أي مجسم يحتوي على `Root` + `Top` أو أي صندوق/NPC (`ShroomKnight`, `blender`, `Chest`, `Breakable`, `Rig`)، وأصبح الاستهداف مقتصراً على الوحوش الحقيقية التي تملك `HumanoidRootPart` + `hadEntrance` أو `Health`، مع نظام **تخطي تلقائي خلال 3 ثوانٍ (`Anti-Stuck Skipper`)**.
-2. **💥 إصلاح قتل الأعداء وتجاوز فحص الضرر في السيرفر (`plrStats.wpnStats.Dmg` + `550,000,000% Buff` + `Tornado`)**:
-   - يقرأ السكربت الآن ضرر سلاحك الفعلي من `require(LocalPlayer.plrStats).wpnStats.Dmg` ويرسله في `onHit` مع تفعيل بف `tempbuff` (`550,000,000%`) ومهارة `tornado` + `abilityHit` لقتل جميع الوحوش والزعماء فوراً دون أن يرفض السيرفر الضربة.
-3. **📦 تكسير الصناديق القابلة للكسر عن بُعد (`Remote Auto Breakables`)**:
-   - يتم تكسير جميع الصناديق الخشبية والجرار (`Breakable`) عن بُعد عبر `onHit` دون الحاجة للانتقال إليها أو الوقوف عندها.
-4. **🎁 إصلاح فتح الصناديق التلقائي بدون حظر السيرفر (`Sequential Anti-Throttle Chest Opener`)**:
-   - فتح الصناديق بالتتابع (`0.08s` بين كل صندوق) من `PlayerGui.gameUI.armory.inventory.clip.Loot` ومجلد `ReplicatedStorage.Drops` (المستويات 1 إلى 3) والصناديق الموجودة داخل الدنجن حتى لا يقوم السيرفر بتجاهل الطلبات المتزامنة.
-   - إضافة **شريط حالة مباشر في تبويب الدنجن** يعرض اسم الوحش المستهدف والمسافة وضرر السلاح الحالي، وتجاوز الكاش (`?v=34`) لضمان تحميل أحدث إصدار فوراً.
+1. **📦 إصلاح تدمير الصناديق والجرار القابلة للكسر (`Breakables Fix`)**:
+   - في الإصدار السابق كانت دالة تكسير الصناديق ترسل `-math.huge` إلى `onHit` مما كان يؤدي إلى شفاء الصناديق إلى `+inf` بدلاً من تدميرها، كما كانت تفحص المستوى الأول من `workspace` فقط.
+   - في **v3.5** تمت إزالة `-math.huge` نهائياً من كامل السكربت، وإضافة فحص عميق (`collectAllPBModels`) يكتشف جميع الصناديق والجرار داخل مجلدات الغرف وينتقل إليها ويدمرها فعلياً عبر `onHit` الإيجابي + `abilityHit` + `swing` + `firetouchinterest`.
+2. **⚔️ إصلاح قتل جميع الأعداء في الدنجن والغارات (`Deep Enemy Scanner & Multi-Hit Damage`)**:
+   - إصلاح فلتر الأسماء الذي كان يستبعد وحوش الفطر والفرسان (`Shroom` / `Knight`) في `CHAPTER 1 / 3`، وحصر الاستبعاد على الـ NPC الثابت `ShroomKnight` والصناديق (`Root` + `Top`) فقط.
+   - دعم الأعداء الموجودين داخل مجلدات أو موديلات الغرف الفرعية (`collectAllPBModels`) والأعداء العاديين الذين يملكون `Humanoid` + `HumanoidRootPart`/`PrimaryPart`.
+   - دمج ضربات متعددة بضرر أساسي `9` (`pixelNerdV1` لتجاوز سقف ضرر السيف الابتدائي في المستويات الأولى) + ضرر السلاح الفعلي `plrStats.wpnStats.Dmg` + `9999999999` + `tornado` + `abilityHit` + بف `550,000,000%`.
+3. **🏃 إصلاح الانتقال التلقائي للمرحلة/الغرفة التالية (`Sequential Room Progression 1 -> 25`)**:
+   - بدلاً من فحص الغرف الأخيرة (`6..9`) فقط، ينتقل اللاعب الآن تلقائياً عبر جميع الغرف المرقمة بالتسلسل (`"2"` إلى `"25"` و `"BossRoom"` و `"Vault"` و `ExitZone`) ويتحرك للأمام عبر البوابات مع فحص الأرضية (`Raycast`) وتفعيل `ProximityPrompt`.
+4. **🎁 إصلاح فتح الصناديق داخل الدنجن وفي الحقيبة (`Deep Workspace + Inventory Chest Opener`)**:
+   - البحث العميق في `workspace:GetDescendants()` عن صناديق الغنائم داخل الغرف والتفاعل معها تلقائياً إلى جانب فتح صناديق الحقيبة (`PlayerGui.gameUI.armory.inventory.clip.Loot` و `ReplicatedStorage.Drops`).
 
 ---
 
-## 📲 كود التشغيل المباشر في Delta Executor (محدث لـ v3.4 بدون كاش)
+## 📲 كود التشغيل المباشر في Delta Executor (محدث لـ v3.5 بدون كاش)
 
 انسخ السطر التالي والصقه في **Delta Executor** واضغط **Execute**:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/slam27893-del/Ata/main/script.lua?v=34"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/slam27893-del/Ata/main/script.lua?v=35"))()
 ```
