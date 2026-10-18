@@ -1,32 +1,27 @@
-# 🛡️ Delta Multi-Game Hub [PROTECTED v3.5 - Turbo & Game-Isolated Edition]
-**Attack on Titan: Revolution (AOT:R) + Pixel Blade**
+# ⚔️ سكربت Multi-Game Delta Hub [PROTECTED v3.6 - World 5: The Sunken Depths / CHRONOS]
 
-سكربت شامل ومحمي بالكامل لتطبيق **Delta Executor** (جوال Android / iOS والكمبيوتر PC) يدعم لعبتين في رابط واحد مع **فصل كامل للواجهة والتابات حسب الماب النشط**:
-1. **Pixel Blade** (تفريم الدنجن الشامل لجميع الغرف والمراحل `Rooms 1..25` + قتل الأعداء والزعماء بضربات متعددة إيجابية + تكسير الصناديق والجرار `Breakables` فعلياً بدون شفائها بالخطأ + فتح جميع الصناديق داخل الدنجن وفي الحقيبة `Auto Open All Chests` + الصيد التلقائي السريع التيربو بالصنارة `Turbo Auto Fishing 60FPS`).
-2. **Attack on Titan: Revolution (AOT:R)** (جميع الخرائط والغارات شاملة خريطة أوتغارد Utgard + لف العائلات + رماح الرعد + الحماية من الباند).
+سكربت شامل ومحمي بالكامل يعمل عبر **رابط واحد فقط** مع **الكشف التلقائي عن اللعبة وعزل القوائم تلقائياً (Strict Per-Game UI Isolation)** على مشغل **Delta Executor** (أندرويد، iOS، وكمبيوتر):
+1. **🗡️ Pixel Blade (تحديث World 5: The Sunken Depths / بداية Arc 2 وحدث CHRONOS — v3.6)**:
+   - عند فتح السكربت داخل **Pixel Blade** تظهر **فقط** تبويبات Pixel Blade (ولن تظهر أي قوائم خاصة بـ Attack on Titan).
+   - **إصلاح جذري وشامل لتفريم الدنجن والقتال وتكسير الصناديق وفتح الغنائم (v3.6)**:
+     - **دعم كامل لتحديث World 5: The Sunken Depths (Arc 2 / CHRONOS)**: يدعم البوس الجديد **Morvik (Ghost Lord)**، دروع وأسلحة **Chronos Set**، بوابة **SunkenDepths**، وصناديق **SunkenChest / ChronosChest / AbyssalChest**، بالإضافة إلى زر تفعيل جميع أكواد التحديث الجديدة (`WORLD5`, `CHRONOS`, `VAULTED`, `1MILLFAVS`, `FISHINGSTASH`, `DAILYTRACKER`, `COMETWASHERE`).
+     - **حل مشكلة عدم فتح الصناديق (Non-Blocking Async Chest Opener)**: تم إصلاح تعليق `openLoot:InvokeServer` عبر تشغيل كل استدعاء داخل `task.spawn` مستقل غير حاجب، مع فتح الصناديق المملوكة فعلياً في `PlayerGui.gameUI.armory.inventory.clip.Loot` + الصناديق الفيزيائية داخل غرف الدنجن (`Root` + `Top` + `ProximityPrompt` + ضرب الصندوق بالسيف).
+     - **حل مشكلة عدم قتل الأعداء (Synced Server Position + 5,500,000,000% Buff + 5000 Poison)**:
+       - التزامن الكامل مع موقع العدو الحقيقي في السيرفر (`eHrp.Anchored = true` بدون تحريك `eHrp.CFrame` محلياً أثناء الفارم لتجنب فشل فحص المسافة `<= 18` في السيرفر).
+       - التمركز الدقيق خلف العدو بـ `6.5` studs (`CFrame.lookAt`) مع تفعيل باف الضرر الخارق `5,500,000,000%` + `poisonElement = 5000` تلقائياً وإرسال `swing` + `onHit` بقوة السلاح الحقيقية (`require(LocalPlayer.plrStats).wpnStats.Dmg`) + `tornado` / `abilityHit` + نقرات السيف الحقيقية `M1`.
+       - التعرف الدقيق على جميع الأعداء عبر `v:GetAttribute("hadEntrance") ~= nil` دون حظر الوحوش التي تنتظر انتهاء حركة الدخول (`hadEntrance == false`).
+     - **حل مشكلة عدم تكسير الصناديق الخشبية والجرار (Breakable Boxes / Crates / Pots)**: التوجه للصناديق القابلة للكسر وضربها بالسيف + `firetouchinterest` على أجزاء السلاح (`Hitbox`/`Blade`/`Handle`) + `onHit` مع مؤقت ذكي (`1.1s`) لعدم التعليق عليها بعد كسرها.
+     - **الانتقال الصحيح بين الغرف (`6->7` Normal، `7->8` Heroic، `8->9` Nightmare، و `Vault` لبوس `Atticus` و `ExitZone`)** دون القفز الخاطئ إلى نهاية الدنجن قبل تصفية الغرفة الحالية.
+   - **🎣 صيد تلقائي تيربو بالصنارة (Turbo Auto Fishing)**:
+     - تفاعل فوري **60 مرة في الثانية (`RenderStepped`)** مع ميني جيم الصيد (الضغط المستمر للدائرة الخضراء + النقر التيربو السريع للسحب الأزرق).
 
----
-
-## ✨ التحديثات والإصلاحات الجذرية في الإصدار v3.5
-
-1. **📦 إصلاح تدمير الصناديق والجرار القابلة للكسر (`Breakables Fix`)**:
-   - في الإصدار السابق كانت دالة تكسير الصناديق ترسل `-math.huge` إلى `onHit` مما كان يؤدي إلى شفاء الصناديق إلى `+inf` بدلاً من تدميرها، كما كانت تفحص المستوى الأول من `workspace` فقط.
-   - في **v3.5** تمت إزالة `-math.huge` نهائياً من كامل السكربت، وإضافة فحص عميق (`collectAllPBModels`) يكتشف جميع الصناديق والجرار داخل مجلدات الغرف وينتقل إليها ويدمرها فعلياً عبر `onHit` الإيجابي + `abilityHit` + `swing` + `firetouchinterest`.
-2. **⚔️ إصلاح قتل جميع الأعداء في الدنجن والغارات (`Deep Enemy Scanner & Multi-Hit Damage`)**:
-   - إصلاح فلتر الأسماء الذي كان يستبعد وحوش الفطر والفرسان (`Shroom` / `Knight`) في `CHAPTER 1 / 3`، وحصر الاستبعاد على الـ NPC الثابت `ShroomKnight` والصناديق (`Root` + `Top`) فقط.
-   - دعم الأعداء الموجودين داخل مجلدات أو موديلات الغرف الفرعية (`collectAllPBModels`) والأعداء العاديين الذين يملكون `Humanoid` + `HumanoidRootPart`/`PrimaryPart`.
-   - دمج ضربات متعددة بضرر أساسي `9` (`pixelNerdV1` لتجاوز سقف ضرر السيف الابتدائي في المستويات الأولى) + ضرر السلاح الفعلي `plrStats.wpnStats.Dmg` + `9999999999` + `tornado` + `abilityHit` + بف `550,000,000%`.
-3. **🏃 إصلاح الانتقال التلقائي للمرحلة/الغرفة التالية (`Sequential Room Progression 1 -> 25`)**:
-   - بدلاً من فحص الغرف الأخيرة (`6..9`) فقط، ينتقل اللاعب الآن تلقائياً عبر جميع الغرف المرقمة بالتسلسل (`"2"` إلى `"25"` و `"BossRoom"` و `"Vault"` و `ExitZone`) ويتحرك للأمام عبر البوابات مع فحص الأرضية (`Raycast`) وتفعيل `ProximityPrompt`.
-4. **🎁 إصلاح فتح الصناديق داخل الدنجن وفي الحقيبة (`Deep Workspace + Inventory Chest Opener`)**:
-   - البحث العميق في `workspace:GetDescendants()` عن صناديق الغنائم داخل الغرف والتفاعل معها تلقائياً إلى جانب فتح صناديق الحقيبة (`PlayerGui.gameUI.armory.inventory.clip.Loot` و `ReplicatedStorage.Drops`).
+2. **⚔️ Attack on Titan: Revolution (AOT:R)**:
+   - عند فتح السكربت داخل **AOT:R** تظهر **فقط** تبويبات هجوم العمالقة (الفارم والعمالقة، المهمات والتعبئة، العائلات والتنقل).
 
 ---
 
-## 📲 كود التشغيل المباشر في Delta Executor (محدث لـ v3.5 بدون كاش)
-
-انسخ السطر التالي والصقه في **Delta Executor** واضغط **Execute**:
+## 📲 كود التشغيل السريع في Delta Executor (انسخ والصق مباشرة)
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/slam27893-del/Ata/main/script.lua?v=35"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/slam27893-del/Ata/main/script.lua"))()
 ```
