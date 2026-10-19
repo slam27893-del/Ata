@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v3.7 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v3.8 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Multi-Script Engine v3.7)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Multi-Thread Engine v3.8)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -12,7 +12,7 @@
 repeat task.wait(0.2) until game:IsLoaded()
 
 local SCRIPT_URL = "https://raw.githubusercontent.com/slam27893-del/Ata/main/script.lua"
-local CONFIG_FILE = "AOTR_Delta_Config_v37.json"
+local CONFIG_FILE = "AOTR_Delta_Config_v38.json"
 
 -- Cleanup previous instance if re-executed in the same server
 if getgenv and getgenv().AOTR_Delta_Cleanup then
@@ -42,28 +42,28 @@ local function randomIdentifier(length)
     return table.concat(out)
 end
 
---// Services (Protected via cloneref)
-local Players = safeCloneref(game:GetService("Players"))
-local RunService = safeCloneref(game:GetService("RunService"))
-local TweenService = safeCloneref(game:GetService("TweenService"))
-local UserInputService = safeCloneref(game:GetService("UserInputService"))
-local ReplicatedStorage = safeCloneref(game:GetService("ReplicatedStorage"))
-local TeleportService = safeCloneref(game:GetService("TeleportService"))
-local GuiService = safeCloneref(game:GetService("GuiService"))
-local HttpService = safeCloneref(game:GetService("HttpService"))
-local Lighting = safeCloneref(game:GetService("Lighting"))
+--// Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+local GuiService = game:GetService("GuiService")
+local HttpService = game:GetService("HttpService")
+local Lighting = game:GetService("Lighting")
 
 local VirtualInputManager = nil
 pcall(function()
-    VirtualInputManager = safeCloneref(game:GetService("VirtualInputManager"))
+    VirtualInputManager = game:GetService("VirtualInputManager")
 end)
 
 local VirtualUser = nil
 pcall(function()
-    VirtualUser = safeCloneref(game:GetService("VirtualUser"))
+    VirtualUser = game:GetService("VirtualUser")
 end)
 
---// LocalPlayer & Dynamic Character References
+--// LocalPlayer & Dynamic Character References (Strict HumanoidRootPart Resolution)
 repeat task.wait() until Players.LocalPlayer
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -75,8 +75,24 @@ local Humanoid = Character and Character:FindFirstChildWhichIsA("Humanoid")
 local function updateCharacterRefs(char)
     Character = char
     if char then
-        HumanoidRootPart = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 10)
-        Humanoid = char:FindFirstChildWhichIsA("Humanoid") or char:WaitForChild("Humanoid", 10)
+        HumanoidRootPart = char:FindFirstChild("HumanoidRootPart")
+        Humanoid = char:FindFirstChildWhichIsA("Humanoid")
+        if not HumanoidRootPart then
+            task.spawn(function()
+                local hrp = char:WaitForChild("HumanoidRootPart", 10)
+                if Character == char and hrp then
+                    HumanoidRootPart = hrp
+                end
+            end)
+        end
+        if not Humanoid then
+            task.spawn(function()
+                local hum = char:WaitForChild("Humanoid", 10)
+                if Character == char and hum then
+                    Humanoid = hum
+                end
+            end)
+        end
     else
         HumanoidRootPart = nil
         Humanoid = nil
@@ -84,27 +100,26 @@ local function updateCharacterRefs(char)
 end
 
 local function refreshCharacterRefs()
-    local rawPlr = game:GetService("Players").LocalPlayer or LocalPlayer
-    local curChar = (rawPlr and rawPlr.Character) or LocalPlayer.Character
+    local rawPlr = Players.LocalPlayer or LocalPlayer
+    local curChar = rawPlr and rawPlr.Character
     if not curChar or not curChar.Parent then
-        if rawPlr and rawPlr.DisplayName and rawPlr.DisplayName ~= "" then
-            curChar = workspace:FindFirstChild(rawPlr.DisplayName)
-        end
-        if (not curChar or not curChar.Parent) and rawPlr and rawPlr.Name then
-            curChar = workspace:FindFirstChild(rawPlr.Name)
+        local byName = rawPlr and rawPlr.Name and workspace:FindFirstChild(rawPlr.Name)
+        if byName and byName:IsA("Model") and byName:FindFirstChild("HumanoidRootPart") then
+            curChar = byName
         end
     end
-    if curChar ~= Character then
-        Character = curChar
-        HumanoidRootPart = curChar and (curChar:FindFirstChild("HumanoidRootPart") or curChar.PrimaryPart or curChar:FindFirstChildWhichIsA("BasePart"))
-        Humanoid = curChar and curChar:FindFirstChildWhichIsA("Humanoid")
-    elseif curChar then
-        if not HumanoidRootPart or not HumanoidRootPart.Parent then
-            HumanoidRootPart = curChar:FindFirstChild("HumanoidRootPart") or curChar.PrimaryPart or curChar:FindFirstChildWhichIsA("BasePart")
+    Character = curChar
+    if curChar then
+        -- Strictly bind ONLY to the real HumanoidRootPart (never a limb/weapon part!)
+        if not HumanoidRootPart or not HumanoidRootPart.Parent or HumanoidRootPart.Parent ~= curChar or HumanoidRootPart.Name ~= "HumanoidRootPart" then
+            HumanoidRootPart = curChar:FindFirstChild("HumanoidRootPart")
         end
-        if not Humanoid or not Humanoid.Parent then
-            Humanoid = curChar:FindFirstChildWhichIsA("Humanoid")
+        if not Humanoid or not Humanoid.Parent or Humanoid.Parent ~= curChar then
+            Humanoid = curChar:FindFirstChildOfClass("Humanoid") or curChar:FindFirstChild("Humanoid")
         end
+    else
+        HumanoidRootPart = nil
+        Humanoid = nil
     end
     return Character, HumanoidRootPart, Humanoid
 end
@@ -216,9 +231,23 @@ end
 
 task.spawn(refreshRemotes)
 
---// Remotes Discovery (Pixel Blade)
+--// Remotes Discovery (Pixel Blade - Resilient Lookup & Cache)
+local CachedPBRemotes = nil
 local function getPBRemotes()
-    return ReplicatedStorage:FindFirstChild("remotes")
+    if CachedPBRemotes and CachedPBRemotes.Parent then
+        return CachedPBRemotes
+    end
+    local rem = ReplicatedStorage:FindFirstChild("remotes") or ReplicatedStorage:FindFirstChild("Remotes")
+    if not rem then
+        for _, child in ipairs(ReplicatedStorage:GetDescendants()) do
+            if (child.Name == "onHit" or child.Name == "swing" or child.Name == "plrUpgrade") and child.Parent then
+                rem = child.Parent
+                break
+            end
+        end
+    end
+    CachedPBRemotes = rem
+    return rem
 end
 
 --//===========================================================================
@@ -269,21 +298,21 @@ local Config = {
     RollInterval = 0.5,
 
     -- [Game 2] Pixel Blade Settings (World 1-5: The Sunken Depths / Arc 2 CHRONOS)
-    PB_AutoFarmDungeon = false,
+    PB_AutoFarmDungeon = true,
     PB_AutoFarmRaid = false,
-    PB_KillAura = false,
-    PB_KillAuraRange = 65,
+    PB_KillAura = true,
+    PB_KillAuraRange = 100,
     PB_GodBuffAndHeal = true,
     PB_AutoBreakables = true,
     PB_BringMobs = false,
     PB_ExpandHitbox = true,
-    PB_HitboxSize = 35,
+    PB_HitboxSize = 40,
     PB_AutoUpgrade = true,
     PB_HideUpgradePopup = true,
     PB_AutoOpenChests = true,
     PB_AutoOpenWishes = false,
-    PB_AutoClaimQuests = false,
-    PB_AutoClaimAchievements = false,
+    PB_AutoClaimQuests = true,
+    PB_AutoClaimAchievements = true,
     PB_SelectedDungeon = "SunkenDepths",
     PB_SelectedDifficulty = "Normal",
     PB_AutoJoinPortal = false,
@@ -306,7 +335,7 @@ local Config = {
 
 local function saveConfig()
     if getgenv then
-        getgenv().AOTR_SavedConfig = Config
+        getgenv().AOTR_SavedConfig_v38 = Config
     end
     if writefile then
         pcall(function()
@@ -316,6 +345,11 @@ local function saveConfig()
 end
 
 local function loadSavedConfig()
+    -- Clear legacy pre-v3.8 memory config so old false defaults don't override v3.8
+    if getgenv then
+        getgenv().AOTR_SavedConfig = nil
+    end
+
     local loadedTable = nil
     if isfile and readfile then
         local ok, exists = pcall(isfile, CONFIG_FILE)
@@ -332,8 +366,8 @@ local function loadSavedConfig()
         end
     end
 
-    if not loadedTable and getgenv and type(getgenv().AOTR_SavedConfig) == "table" then
-        loadedTable = getgenv().AOTR_SavedConfig
+    if not loadedTable and getgenv and type(getgenv().AOTR_SavedConfig_v38) == "table" then
+        loadedTable = getgenv().AOTR_SavedConfig_v38
     end
 
     if loadedTable then
@@ -341,28 +375,6 @@ local function loadSavedConfig()
             if Config[k] ~= nil and type(Config[k]) == type(v) then
                 Config[k] = v
             end
-        end
-        -- Upgrade legacy v3.1/v3.2 settings automatically to v3.3
-        if Config.PB_FishTapInterval and Config.PB_FishTapInterval >= 0.05 then
-            Config.PB_FishTapInterval = 0.015
-        end
-        if Config.PB_FishPostWait and Config.PB_FishPostWait >= 1.2 then
-            Config.PB_FishPostWait = 0.35
-        end
-        if Config.PB_FishTimeout and Config.PB_FishTimeout >= 12 then
-            Config.PB_FishTimeout = 5
-        end
-        if Config.PB_FishCastHold and Config.PB_FishCastHold >= 1.0 then
-            Config.PB_FishCastHold = 0.6
-        end
-        if Config.PB_FishGreenHold and Config.PB_FishGreenHold >= 1.4 then
-            Config.PB_FishGreenHold = 1.0
-        end
-        if Config.PB_KillAuraRange and Config.PB_KillAuraRange < 50 then
-            Config.PB_KillAuraRange = 60
-        end
-        if Config.PB_HitboxSize and Config.PB_HitboxSize < 30 then
-            Config.PB_HitboxSize = 35
         end
     end
 end
@@ -421,6 +433,11 @@ local State = {
     PB_EnteredBossRoom = false,
     PB_EnteredKorthRoom = false,
     PB_ActiveTargetCFrame = nil,
+    PB_ActiveFollowPart = nil,
+    PB_ActiveFollowMob = nil,
+    PB_CachedWeaponDmg = 50,
+    PB_BreakablePrevHP = {},
+    PB_BreakableUseNegative = false,
     PB_LastSafeY = nil,
     PB_LastM1Time = 0,
     PB_LastAdvanceTime = 0,
@@ -431,7 +448,9 @@ local State = {
     PB_LastDropsOpenTime = 0,
     PB_LastBuffedChar = nil,
     PB_VisitedFinalRoom = {},
+    PB_VisitedCampfires = {},
     PB_UsedExitZones = {},
+    PB_UsedPrompts = {},
     PB_CompletedProps = {},
     PB_CurrentPropTarget = nil,
     PB_CurrentPropStartTime = 0,
@@ -444,7 +463,7 @@ local State = {
     PB_OpenedWorkspaceChests = {},
     PB_LastVisitedRoomName = nil,
     PB_RoomWaypointIndex = 1,
-    PB_DungeonStatusText = "متوقف (جاهز للتشغيل)",
+    PB_DungeonStatusText = "جاهز للتشغيل...",
     PB_OpeningChestsBusy = false,
     PB_FishCaughtCount = 0,
     PB_LastCastTime = 0,
@@ -475,27 +494,29 @@ StealthESPFolder.Name = randomIdentifier(16)
 StealthESPFolder.Parent = getSafeGuiParent()
 
 --//===========================================================================
---// 🛡️ LAYER 2: METAMETHOD HOOKS (ANTI-KICK & HITBOX PROPERTY SPOOFER)
+--// 🛡️ LAYER 2: METAMETHOD HOOKS (AOT:R ONLY + CCLOSURE SAFE GUARD)
 --//===========================================================================
 
 pcall(function()
-    if hookmetamethod and getnamecallmethod and checkcaller then
-        local oldNamecall
-        oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-            local method = getnamecallmethod()
-            if not checkcaller() and Config.AntiKick then
-                if self == LocalPlayer and (method == "Kick" or method == "kick") then
-                    State.BlockedKicksCount = State.BlockedKicksCount + 1
-                    warn("[🛡️ Security] Blocked a client Kick attempt!")
-                    return nil
-                end
-            end
-            return oldNamecall(self, ...)
-        end)
+    if CurrentGame == "AOTR" and hookmetamethod and getnamecallmethod and checkcaller then
+        local wrapC = newcclosure or function(f) return f end
+        if not (getgenv and getgenv().AOTR_MetamethodHooked) then
+            if getgenv then getgenv().AOTR_MetamethodHooked = true end
 
-        if CurrentGame == "AOTR" then
+            local oldNamecall
+            oldNamecall = hookmetamethod(game, "__namecall", wrapC(function(self, ...)
+                local method = getnamecallmethod()
+                if not checkcaller() and Config.AntiKick then
+                    if self == LocalPlayer and (method == "Kick" or method == "kick") then
+                        State.BlockedKicksCount = State.BlockedKicksCount + 1
+                        return nil
+                    end
+                end
+                return oldNamecall(self, ...)
+            end))
+
             local oldIndex
-            oldIndex = hookmetamethod(game, "__index", function(self, key)
+            oldIndex = hookmetamethod(game, "__index", wrapC(function(self, key)
                 if not checkcaller() and Config.SpoofNapeProperties then
                     local origData = State.OriginalNapeSizes[self]
                     if origData then
@@ -509,19 +530,8 @@ pcall(function()
                     end
                 end
                 return oldIndex(self, key)
-            end)
+            end))
         end
-    end
-
-    if hookfunction and LocalPlayer.Kick then
-        local oldKick
-        oldKick = hookfunction(LocalPlayer.Kick, function(self, ...)
-            if self == LocalPlayer and Config.AntiKick then
-                State.BlockedKicksCount = State.BlockedKicksCount + 1
-                return nil
-            end
-            return oldKick(self, ...)
-        end)
     end
 end)
 
@@ -1229,13 +1239,14 @@ end
 --//===========================================================================
 --// 🗡️ GAME 2 MODULE: PIXEL BLADE FUNCTIONS (DUNGEONS, RAIDS, BREAKABLES, LOOT)
 --//===========================================================================
--- Synthesized from:
+-- Multi-Thread Engine v3.8 combining:
 -- 1. thha3203/scripts/pixel-blade-v2..v5.lua & custom-pixel-blade.lua
 -- 2. Black69Weeds/Vortex_PixelBlade/PixelBlade (sub[26..35])
 -- 3. TexRBLX/Roblox-stuff/pixel blade/final.lua (L2.4..L2.30)
 -- 4. qturkieh-pixel/Killer-hub/pixel blade.lua (Proto 0.0..0.4)
 -- 5. Mana-scripts/Neverlose-UI/Games/18172550962/Source.lua
--- 6. Leofreddare/LelSploit/LelHub/18172550962.luau & thaemmayanh/hub/test.lua
+-- 6. Fog1ch/PIXEL-BLADE-Fast-attack-aura-OPEN-SOURCE & WPBUNBLCOKER/PixelBlade-GUI
+-- 7. thaemmayanh/hub/test.lua & lucas0conhecimento/pixel-blade-hub
 
 local PB_IGNORE_MOBS = {
     "ShroomKnight",
@@ -1246,6 +1257,7 @@ local PB_IGNORE_MOBS = {
     "Teeth Trap",
     "teeth_trap",
     "Teeth_Trap",
+    "SpikeTrap",
     "BotRig",
     "Rig",
     "Dummy"
@@ -1261,6 +1273,19 @@ local PB_BOSS_NAMES = {
     ["Korth"] = true,        -- Ancient Sands / Library Boss
     ["CorruptKorth"] = true, -- Corrupt Library Boss
     ["BookHand"] = true      -- Korth's BookHands
+}
+
+local PB_BREAKABLE_NAME_HINTS = {
+    "breakable",
+    "crate",
+    "barrel",
+    "box",
+    "pot",
+    "vase",
+    "urn",
+    "jar",
+    "destructible",
+    "crystal"
 }
 
 local PB_CHRONOS_WORLD5_CODES = {
@@ -1287,36 +1312,54 @@ local PB_KNOWN_LOOT_CHESTS = {
 }
 
 local function getPBRawCharacter()
-    local rawPlr = game:GetService("Players").LocalPlayer or LocalPlayer
+    local rawPlr = Players.LocalPlayer or LocalPlayer
     if not rawPlr then return Character end
-    local byDisplay = (rawPlr.DisplayName ~= rawPlr.Name) and workspace:FindFirstChild(rawPlr.DisplayName) or nil
-    local byName = workspace:FindFirstChild(rawPlr.Name)
-    return byDisplay or byName or rawPlr.Character or Character
+    if rawPlr.Character and rawPlr.Character.Parent then
+        return rawPlr.Character
+    end
+    local byName = rawPlr.Name and workspace:FindFirstChild(rawPlr.Name) or nil
+    if byName and byName:IsA("Model") and byName:FindFirstChild("HumanoidRootPart") then
+        return byName
+    end
+    return Character
 end
 
--- Exact Weapon Base Damage reader from require(LocalPlayer.plrStats).wpnStats.Dmg
--- Matches Vortex_PixelBlade sub[26] & thha3203 pixel-blade-v3/v5 current_damage()
-local function currentPBWeaponDamage()
-    local dmg = 9
-    pcall(function()
-        local rawPlr = game:GetService("Players").LocalPlayer or LocalPlayer
-        local statsMod = rawPlr and rawPlr:FindFirstChild("plrStats")
-        if statsMod then
-            local ok, stats = pcall(require, statsMod)
-            if ok and type(stats) == "table" and type(stats.wpnStats) == "table" then
-                for k, v in next, stats.wpnStats do
-                    if k == "Dmg" and type(v) == "number" and v > 0 then
-                        dmg = v
-                        break
-                    elseif type(v) == "table" and type(v.Dmg) == "number" and v.Dmg > 0 then
-                        dmg = v.Dmg
-                        break
+-- Async Background Weapon Base Damage Reader (NEVER blocks or yields combat threads!)
+task.spawn(function()
+    while State.Running do
+        pcall(function()
+            local rawPlr = Players.LocalPlayer or LocalPlayer
+            local statsMod = rawPlr and rawPlr:FindFirstChild("plrStats")
+            if statsMod and statsMod:IsA("ModuleScript") then
+                local ok, stats = pcall(require, statsMod)
+                if ok and type(stats) == "table" and type(stats.wpnStats) == "table" then
+                    for k, v in next, stats.wpnStats do
+                        if k == "Dmg" and type(v) == "number" and v > 0 then
+                            State.PB_CachedWeaponDmg = v
+                            break
+                        elseif type(v) == "table" and type(v.Dmg) == "number" and v.Dmg > 0 then
+                            State.PB_CachedWeaponDmg = v.Dmg
+                            break
+                        end
                     end
                 end
             end
-        end
-    end)
-    return dmg
+        end)
+        task.wait(3.0)
+    end
+end)
+
+local function currentPBWeaponDamage()
+    return tonumber(State.PB_CachedWeaponDmg) or 50
+end
+
+local function isPBPlayerModel(mob)
+    if not mob or not mob:IsA("Model") then return false end
+    if mob == Character or mob == getPBRawCharacter() then return true end
+    if Players:GetPlayerFromCharacter(mob) then return true end
+    if Players:FindFirstChild(mob.Name) then return true end
+    if mob.Name == LocalPlayer.Name or mob.Name == LocalPlayer.DisplayName then return true end
+    return false
 end
 
 local function isPBChestModel(mob)
@@ -1331,26 +1374,9 @@ local function isPBChestModel(mob)
     return string.find(low, "chest", 1, true) ~= nil
 end
 
--- Exact Breakable check from Mana-scripts/Neverlose-UI/Games/18172550962/Source.lua:
--- Breakables in Pixel Blade have "breakable" in their lowercase name (or sit in a Breakables folder)
-local function isPBBreakableModel(mob)
-    if not mob or not mob:IsA("Model") then return false end
-    if isPBChestModel(mob) then return false end
-    if mob:GetAttribute("hadEntrance") ~= nil or PB_BOSS_NAMES[mob.Name] then
-        return false
-    end
-    local low = string.lower(mob.Name)
-    if string.find(low, "breakable", 1, true) then
-        return true
-    end
-    if mob.Parent and string.find(string.lower(mob.Parent.Name), "breakable", 1, true) then
-        return true
-    end
-    return false
-end
-
 local function isPBIgnoredModel(mob)
     if not mob or not mob:IsA("Model") then return true end
+    if isPBPlayerModel(mob) then return true end
     if table.find(PB_IGNORE_MOBS, mob.Name) then return true end
     local low = string.lower(mob.Name)
     if string.find(low, "botrig", 1, true)
@@ -1371,20 +1397,51 @@ local function isPBIgnoredModel(mob)
     return false
 end
 
--- Workspace Model Collector (checks workspace:GetChildren() first like thha3203/Vortex/Killer-hub, plus Room sub-models)
+-- Breakable Detector (Mana-scripts + all Dungeon Breakable Props/Crates/Boxes/Barrels/Pots)
+local function isPBBreakableModel(mob)
+    if not mob or not mob:IsA("Model") then return false end
+    if isPBChestModel(mob) or isPBIgnoredModel(mob) then return false end
+    if mob:GetAttribute("hadEntrance") ~= nil or PB_BOSS_NAMES[mob.Name] or mob:FindFirstChild("worm") then
+        return false
+    end
+    local low = string.lower(mob.Name)
+    for _, kw in ipairs(PB_BREAKABLE_NAME_HINTS) do
+        if string.find(low, kw, 1, true) then
+            return true
+        end
+    end
+    if mob.Parent and mob.Parent ~= workspace then
+        local pLow = string.lower(mob.Parent.Name)
+        for _, kw in ipairs(PB_BREAKABLE_NAME_HINTS) do
+            if string.find(pLow, kw, 1, true) then
+                return true
+            end
+        end
+    end
+    -- In Pixel Blade, breakable crates/pots/boxes have a Humanoid + Part/MeshPart, but NO HumanoidRootPart and NO weapon!
+    local hum = mob:FindFirstChildOfClass("Humanoid") or mob:FindFirstChild("Humanoid")
+    if hum and hum.Health > 0 and not mob:FindFirstChild("HumanoidRootPart") and not mob:FindFirstChild("weapon") then
+        local hasPart = mob:FindFirstChildOfClass("Part") or mob:FindFirstChildOfClass("MeshPart") or mob:FindFirstChildWhichIsA("BasePart", true)
+        if hasPart then
+            return true
+        end
+    end
+    return false
+end
+
+-- Fast Workspace & Room Model Collector
 local function collectAllPBModels()
     local now = tick()
-    if State.PB_CachedModels and #State.PB_CachedModels > 0 and (now - (State.PB_LastModelScanTime or 0)) < 0.12 then
+    if State.PB_CachedModels and #State.PB_CachedModels > 0 and (now - (State.PB_LastModelScanTime or 0)) < 0.08 then
         return State.PB_CachedModels
     end
     State.PB_LastModelScanTime = now
 
     local list = {}
     local seen = {}
-    local rawChar = getPBRawCharacter()
 
     local function addCandidate(m)
-        if m and m:IsA("Model") and not seen[m] and m ~= Character and m ~= rawChar then
+        if m and m:IsA("Model") and not seen[m] and not isPBPlayerModel(m) then
             seen[m] = true
             table.insert(list, m)
         end
@@ -1481,12 +1538,9 @@ local function getPBMobCurrentHP(mob)
     return 0
 end
 
--- Exact is_mob_alive(mob) from thha3203 pixel-blade-v2..v5 & Vortex_PixelBlade sub[27]
+-- Exact is_mob_alive(mob) from thha3203 pixel-blade-v2..v5 & Vortex_PixelBlade sub[27] & Fog1ch
 local function isPBMobAlive(mob)
     if not mob or not mob:IsA("Model") or not mob.Parent then return false end
-    local rawChar = getPBRawCharacter()
-    if mob == Character or mob == rawChar or Players:GetPlayerFromCharacter(mob) then return false end
-    if mob.Name == LocalPlayer.Name or mob.Name == LocalPlayer.DisplayName then return false end
     if isPBIgnoredModel(mob) then return false end
 
     if mob:FindFirstChild("worm") and mob.worm:FindFirstChild("Health") then
@@ -1511,14 +1565,13 @@ local function isPBMobAlive(mob)
     return false
 end
 
--- Exact Enemy Check combining:
--- 1. thha3203 v3/v5 & Vortex_PixelBlade sub[27]: v:GetAttribute("hadEntrance") ~= nil or v.Name == "BookHand" or v:FindFirstChild("worm")
--- 2. TexRBLX final.lua L2.5: (v:FindFirstChild("basehitbox") or v:FindFirstChild("weapon")) and v:FindFirstChild("Humanoid")
--- 3. Raid mode: isRaid and v:FindFirstChild("Humanoid") and v:FindFirstChild("HumanoidRootPart")
+-- Universal Enemy Check combining:
+-- 1. thha3203 v3/v5 & Vortex_PixelBlade: hadEntrance ~= nil or BookHand or worm
+-- 2. TexRBLX final.lua L2.5: (basehitbox or weapon) and Humanoid
+-- 3. Fog1ch / WPBUNBLCOKER / Mana-scripts (2026): Humanoid (Health > 0) and HumanoidRootPart (all worlds including World 5 Sunken Depths!)
 local function isPBTrueEnemy(mob, isRaid)
     if not mob or not mob:IsA("Model") then return false end
     if isPBChestModel(mob) or isPBBreakableModel(mob) or isPBIgnoredModel(mob) then return false end
-    if Players:GetPlayerFromCharacter(mob) then return false end
     if not isPBMobAlive(mob) then return false end
 
     if mob:GetAttribute("hadEntrance") ~= nil then
@@ -1530,18 +1583,18 @@ local function isPBTrueEnemy(mob, isRaid)
     if mob:FindFirstChild("worm") and mob.worm:FindFirstChild("Health") then
         return true
     end
-    if (mob:FindFirstChild("basehitbox") or mob:FindFirstChild("weapon")) and (mob:FindFirstChildOfClass("Humanoid") or mob:FindFirstChild("Humanoid")) then
-        return true
-    end
-    if isRaid and (mob:FindFirstChildOfClass("Humanoid") or mob:FindFirstChild("Humanoid")) and mob:FindFirstChild("HumanoidRootPart") then
-        return true
+    local hum = mob:FindFirstChildOfClass("Humanoid") or mob:FindFirstChild("Humanoid")
+    if hum and hum.Health > 0 then
+        if mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChild("basehitbox") or mob:FindFirstChild("weapon") then
+            return true
+        end
     end
     return false
 end
 
--- Exact mob_book_hand() helper from thha3203 pixel-blade-v3.lua for Korth boss fight
+-- Exact mob_book_hand() helper from thha3203 pixel-blade-v3.lua & thaemmayanh/hub/test.lua for Korth boss fight
 local function findAliveBookHand()
-    for _, v in ipairs(workspace:GetChildren()) do
+    for _, v in ipairs(collectAllPBModels()) do
         if v.Name == "BookHand" and isPBMobAlive(v) then
             return v, getPBMobTargetPart(v)
         end
@@ -1549,15 +1602,13 @@ local function findAliveBookHand()
     return nil, nil
 end
 
--- Pure, Deterministic Enemy Finder (matches closest_mob() in thha3203 v2..v5 & Vortex_PixelBlade sub[27])
--- Strictly returns ONLY living enemies (never decorative props/chests) so combat is never hijacked!
+-- Deterministic Enemy Finder (prioritizes BookHand -> Boss -> Ranged -> Active hadEntrance == true -> Any living enemy)
 local function findBestPBTarget(isRaid)
     refreshCharacterRefs()
     if not Character or not HumanoidRootPart then return nil, nil end
     local myPos = HumanoidRootPart.Position
-    local rawChar = getPBRawCharacter()
 
-    -- If Korth spawned a living BookHand, kill BookHand first (thha3203 pixel-blade-v3)
+    -- 1. If Korth spawned a living BookHand, kill BookHand first!
     local bhMob, bhPart = findAliveBookHand()
     if bhMob and bhPart then
         return bhMob, bhPart
@@ -1571,13 +1622,13 @@ local function findBestPBTarget(isRaid)
     local allModels = collectAllPBModels()
 
     for _, v in ipairs(allModels) do
-        if v and v.Parent and v ~= Character and v ~= rawChar and not isPBIgnoredModel(v) and isPBTrueEnemy(v, isRaid) then
+        if v and v.Parent and isPBTrueEnemy(v, isRaid) then
             local part = getPBMobTargetPart(v)
             if part then
                 if not isRaid then
                     local eHrp = v:FindFirstChild("HumanoidRootPart")
                     if eHrp and eHrp:IsA("BasePart") then
-                        eHrp.Anchored = true
+                        pcall(function() eHrp.Anchored = true end)
                     end
                 end
 
@@ -1588,7 +1639,7 @@ local function findBestPBTarget(isRaid)
                 local dist = (mobPos - myPos).Magnitude
                 local hadEnt = v:GetAttribute("hadEntrance")
 
-                if v.Name == "Atticus" or v.Name == "Korth" or v.Name == "CorruptKorth" or v.Name == "Morvik" or v.Name == "Maneater" or v.Name == "LumberJack" then
+                if PB_BOSS_NAMES[v.Name] then
                     if dist < distBoss then
                         distBoss = dist
                         targetBoss = v
@@ -1596,7 +1647,7 @@ local function findBestPBTarget(isRaid)
                     end
                 end
 
-                if (string.find(v.Name, "Archer", 1, true) or string.find(v.Name, "Mage", 1, true)) and (hadEnt == true or dist <= 130) then
+                if (string.find(v.Name, "Archer", 1, true) or string.find(v.Name, "Mage", 1, true)) and (hadEnt == true or dist <= 140) then
                     if dist < distRanged then
                         distRanged = dist
                         targetRanged = v
@@ -1627,61 +1678,86 @@ local function findBestPBTarget(isRaid)
     return targetAny, partAny
 end
 
--- Remote Breakable Destroyer (Mana-scripts/Neverlose-UI/Games/18172550962/Source.lua lines 285-295)
--- Destroys all "breakable" objects in workspace via onHit & abilityHit WITHOUT teleporting player away from combat!
+-- Adaptive Remote Breakables Destroyer (Mana-scripts + Adaptive Positive/Negative Damage so NaN never happens!)
 local function pbBreakAllBreakablesRemotely()
-    local now = tick()
-    if (now - (State.PB_LastBreakablesTime or 0)) < 0.35 then return end
-    State.PB_LastBreakablesTime = now
-
     local pbRemotes = getPBRemotes()
     if not pbRemotes then return end
+    local swing = pbRemotes:FindFirstChild("swing")
     local onHit = pbRemotes:FindFirstChild("onHit")
+    local useAbility = pbRemotes:FindFirstChild("useAbility")
     local abilityHit = pbRemotes:FindFirstChild("abilityHit")
     local wpnDmg = currentPBWeaponDamage()
 
     local allModels = collectAllPBModels()
+    local foundBreakable = false
+
     for _, v in ipairs(allModels) do
         if v and v.Parent and isPBBreakableModel(v) then
             local hum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
             if hum and hum.Health > 0 then
+                foundBreakable = true
+                local prevHP = State.PB_BreakablePrevHP[hum]
+                local curHP = hum.Health
+                State.PB_BreakablePrevHP[hum] = curHP
+
                 pcall(function()
+                    if swing then
+                        swing:FireServer()
+                    end
                     if onHit then
-                        onHit:FireServer(hum, -math.huge, {}, 0)
-                        onHit:FireServer(hum, wpnDmg, {}, 0)
-                        onHit:FireServer(hum, 9999999999, {}, 0)
+                        if prevHP and curHP >= prevHP then
+                            -- Previous positive hit didn't lower HP -> use Mana-scripts -math.huge!
+                            onHit:FireServer(hum, -math.huge, {}, 0)
+                        else
+                            -- Standard positive damage hit
+                            onHit:FireServer(hum, 9999999999, {}, 0)
+                            onHit:FireServer(hum, wpnDmg, {}, 0)
+                        end
+                    end
+                    if useAbility then
+                        useAbility:FireServer("tornado")
                     end
                     if abilityHit then
-                        abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 1 } })
+                        abilityHit:FireServer(hum, 9999999999, { ["stun"] = { ["dur"] = 1 } })
                     end
                 end)
             end
         end
     end
+
+    return foundBreakable
 end
 
--- God Damage Buff (5,500,000,000% Dmg + 5000 Poison Element + 999,999,999% TexRBLX One-Shot) & Auto Heal
--- Fires tempbuff ONCE per character life (or every 45s) just like thha3203 v3/v5 & Vortex_PixelBlade so we never flood the server!
+-- God Damage Buff (TexRBLX 999,999,999% + Vortex/thha3203 5.5B% + 5000 Poison), Auto Heal & Auto Block
 local function applyPBTempBuffAndHeal(forceBuff)
     refreshCharacterRefs()
     local pbRemotes = getPBRemotes()
-    local abilityEvent = pbRemotes and pbRemotes:FindFirstChild("abilityEvent")
-    if not abilityEvent then return end
+    if not pbRemotes then return end
 
+    local abilityEvent = pbRemotes:FindFirstChild("abilityEvent")
+    local blockRemote = pbRemotes:FindFirstChild("block")
     local now = tick()
     local rawChar = getPBRawCharacter()
     local activeChar = rawChar or Character
     if not activeChar then return end
 
-    -- Apply tempbuff once per Character spawn (or every 45s / when forced)
-    if forceBuff or State.PB_LastBuffedChar ~= activeChar or (now - (State.PB_LastBuffTime or 0)) >= 45 then
+    -- Auto Block (WPBUNBLCOKER & Fog1ch God Mode)
+    if blockRemote then
+        pcall(function()
+            blockRemote:FireServer(true)
+        end)
+    end
+
+    if not abilityEvent then return end
+
+    -- Apply tempbuff once per Character spawn (or every 35s / when forced)
+    if forceBuff or State.PB_LastBuffedChar ~= activeChar or (now - (State.PB_LastBuffTime or 0)) >= 35 then
         State.PB_LastBuffTime = now
         State.PB_LastBuffedChar = activeChar
         task.spawn(function()
             pcall(function()
                 for _, ch in ipairs({ activeChar, Character }) do
                     if ch then
-                        -- 1. TexRBLX final.lua L2.6 One-Shot Weapon Damage Buff
                         abilityEvent:FireServer({
                             char = ch,
                             statBoosts = {
@@ -1691,7 +1767,6 @@ local function applyPBTempBuffAndHeal(forceBuff)
                             dur = 999999,
                             name = "tempbuff"
                         })
-                        -- 2. thha3203 v3/v5 & Vortex_PixelBlade Poison + 5.5B% Damage Buff
                         abilityEvent:FireServer({
                             char = ch,
                             name = "tempbuff",
@@ -1715,8 +1790,8 @@ local function applyPBTempBuffAndHeal(forceBuff)
         end)
     end
 
-    -- Apply Heal every 0.5s (matches thha3203 v2..v5 healArgs)
-    if forceBuff or (now - (State.PB_LastHealTime or 0)) >= 0.5 then
+    -- Apply Heal every 0.4s (matches thha3203 v2..v5 healArgs)
+    if forceBuff or (now - (State.PB_LastHealTime or 0)) >= 0.4 then
         State.PB_LastHealTime = now
         pcall(function()
             for _, ch in ipairs({ activeChar, Character }) do
@@ -1732,10 +1807,10 @@ local function applyPBTempBuffAndHeal(forceBuff)
     end
 end
 
--- Real M1 Sword Click + Tool:Activate() + VirtualInputManager Mouse Button (for Atticus & close combat)
+-- Real M1 Sword Click + Tool:Activate() + VirtualInputManager Mouse Button
 local function pbPerformRealM1Attack()
     local now = tick()
-    if (now - (State.PB_LastM1Time or 0)) < 0.22 then return end
+    if (now - (State.PB_LastM1Time or 0)) < 0.2 then return end
     State.PB_LastM1Time = now
 
     task.spawn(function()
@@ -1750,43 +1825,15 @@ local function pbPerformRealM1Attack()
                 end
             end
             if VirtualInputManager then
-                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
-                task.wait(0.03)
-                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                task.wait(0.02)
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
             end
         end)
     end)
 end
 
--- Exact Tornado + AbilityHit Mass Kill (thha3203 pixel-blade-v5 mass_kill + Killer-hub Proto 0.4 + TexRBLX L2.5)
-local function pbMassKillWithTornado()
-    local pbRemotes = getPBRemotes()
-    if not pbRemotes then return end
-    local useAbility = pbRemotes:FindFirstChild("useAbility")
-    local abilityHit = pbRemotes:FindFirstChild("abilityHit")
-    if not abilityHit then return end
-
-    pcall(function()
-        if useAbility then
-            useAbility:FireServer("tornado")
-        end
-        local rawChar = getPBRawCharacter()
-        local allModels = collectAllPBModels()
-        for _, v in ipairs(allModels) do
-            if v and v.Parent and v ~= Character and v ~= rawChar and not isPBIgnoredModel(v) then
-                if v:GetAttribute("hadEntrance") ~= nil or v:FindFirstChild("basehitbox") or v:FindFirstChild("weapon") or PB_BOSS_NAMES[v.Name] then
-                    local hum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
-                    if hum and hum.Health > 0 then
-                        abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 1 } })
-                    end
-                end
-            end
-        end
-    end)
-end
-
--- Exact Single-Target Weapon Swing + onHit + Boss Ability Attack
--- Matches thha3203 pixel-blade-v2..v5, Vortex_PixelBlade sub[28], and thaemmayanh/hub/test.lua
+-- Multi-Vector Damage Engine (WPBUNBLCOKER 9999999999 + thha3203 wpnDmg + Tornado abilityHit math.huge)
 local function pbDamageModel(v, wpnDmg)
     if not v or not v:IsA("Model") or not v.Parent then return end
     local pbRemotes = getPBRemotes()
@@ -1811,6 +1858,9 @@ local function pbDamageModel(v, wpnDmg)
             swing:FireServer()
         end
         if onHit and targetObj then
+            -- 1. Direct 10B damage (Fog1ch / WPBUNBLCOKER 2026)
+            onHit:FireServer(targetObj, 9999999999, {}, 0)
+            -- 2. Weapon damage with tempbuff multiplier (thha3203 / Vortex)
             onHit:FireServer(targetObj, wpnDmg or currentPBWeaponDamage(), {}, 0)
         end
         if useAbility then
@@ -1821,78 +1871,101 @@ local function pbDamageModel(v, wpnDmg)
         end
         if abilityHit and hum and hum.Health > 0 then
             abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 1 } })
+            abilityHit:FireServer(hum, 9999999999, { ["stun"] = { ["dur"] = 1 } })
         end
     end)
 end
 
--- Exact Position Update from thha3203 pixel-blade-v2..v5 & Vortex_PixelBlade sub[28..29]:
--- ONLY updates hrp.CFrame when (mob_position - hrp.Position).Magnitude >= 10 (or forceTeleport == true)
--- so the player does NOT jitter/re-teleport at 60 FPS and server hit validation always succeeds!
-local function pbPositionAtTarget(mob, part, forceTeleport)
-    refreshCharacterRefs()
-    if not mob or not part or not HumanoidRootPart then return end
+-- Tornado + AbilityHit Mass Kill (thha3203 pixel-blade-v5 mass_kill + Killer-hub Proto 0.4 + lucas0conhecimento)
+local function pbMassKillWithTornado()
+    local pbRemotes = getPBRemotes()
+    if not pbRemotes then return end
+    local swing = pbRemotes:FindFirstChild("swing")
+    local onHit = pbRemotes:FindFirstChild("onHit")
+    local useAbility = pbRemotes:FindFirstChild("useAbility")
+    local abilityHit = pbRemotes:FindFirstChild("abilityHit")
+    local wpnDmg = currentPBWeaponDamage()
+
+    pcall(function()
+        if swing then
+            swing:FireServer()
+        end
+        if useAbility then
+            useAbility:FireServer("tornado")
+        end
+        local allModels = collectAllPBModels()
+        for _, v in ipairs(allModels) do
+            if v and v.Parent and isPBTrueEnemy(v, true) then
+                local hum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
+                if hum and hum.Health > 0 then
+                    if onHit then
+                        onHit:FireServer(hum, 9999999999, {}, 0)
+                        onHit:FireServer(hum, wpnDmg, {}, 0)
+                    end
+                    if abilityHit then
+                        abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 1 } })
+                        abilityHit:FireServer(hum, 9999999999, { ["stun"] = { ["dur"] = 1 } })
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- Computes the exact Aerial/Behind Combat CFrame for continuous flying & following (thaemmayanh + thha3203)
+local function pbComputeCombatCFrame(mob, part)
+    if not mob or not part or not part.Parent then return nil end
 
     if mob.Name == "Maneater" or mob:FindFirstChild("worm") then
         local root = mob:FindFirstChild("Root") or mob:FindFirstChild("HumanoidRootPart") or part
         local mobPos = Vector3.new(root.Position.X, 35, root.Position.Z)
-        local targetPos = mobPos + (root.CFrame.LookVector * -8)
-        HumanoidRootPart.CFrame = CFrame.lookAt(targetPos, mobPos)
+        local targetPos = mobPos + (root.CFrame.LookVector * -7)
+        return CFrame.lookAt(targetPos, mobPos)
     elseif mob.Name == "BookHand" then
         local bh = mob:FindFirstChild("basehitbox") or mob:FindFirstChild("basehitbox", true) or part
-        HumanoidRootPart.CFrame = bh.CFrame * CFrame.new(0, 0, 5)
+        return bh.CFrame * CFrame.new(0, 1.5, 4.5)
     elseif mob.Name == "Nekros" or mob.Name == "DarkNekros" then
         local pivot = part.CFrame
         pcall(function() pivot = mob:GetPivot() end)
         local mobPos = pivot.Position
-        local targetPos = mobPos + (pivot.LookVector * 2)
-        if forceTeleport or (mobPos - HumanoidRootPart.Position).Magnitude >= 10 then
-            HumanoidRootPart.CFrame = CFrame.lookAt(targetPos, mobPos)
-        end
+        local targetPos = mobPos + (pivot.LookVector * 2.5) + Vector3.new(0, 1.5, 0)
+        return CFrame.lookAt(targetPos, mobPos)
     else
         local pivot = part.CFrame
         pcall(function() pivot = mob:GetPivot() end)
         local mobPos = pivot.Position
-        local targetPos = mobPos + (pivot.LookVector * -8)
-        if forceTeleport or (mobPos - HumanoidRootPart.Position).Magnitude >= 10 then
-            HumanoidRootPart.CFrame = CFrame.lookAt(targetPos, mobPos)
-        end
+        local targetPos = mobPos + (pivot.LookVector * -6.5) + Vector3.new(0, 1.5, 0)
+        return CFrame.lookAt(targetPos, mobPos)
+    end
+end
+
+local function pbPositionAtTarget(mob, part, forceTeleport)
+    refreshCharacterRefs()
+    if not mob or not part or not HumanoidRootPart then return end
+    local cf = pbComputeCombatCFrame(mob, part)
+    if cf then
+        State.PB_ActiveFollowMob = mob
+        State.PB_ActiveFollowPart = part
+        State.PB_ActiveTargetCFrame = cf
+        HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+        HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
+        HumanoidRootPart.CFrame = cf
     end
 end
 
 -- Complete Room Progression Engine combining:
--- 1. Killer-hub (Proto 0.0) & lucas0conhecimento/pixel-blade-hub/modules/farm.lua:
---    Teleport to enabled ProximityPrompts + fireproximityprompt, and step through ExitZone parts!
--- 2. thaemmayanh/hub/test.lua & thha3203 pixel-blade-v2..v5 & Vortex_PixelBlade sub[28..29]:
---    Safe-zone room transitions (AncientSands not Maneater -> 7/8/9, 20 -> BossRoom, Grasslands not LumberJack -> 7/8/9)
+-- 1. thha3203 v2..v5 & Vortex_PixelBlade: Safe-zone numbered room transitions (6->7 Normal, 7->8 Heroic, 8->9 Nightmare, 20->BossRoom)
+-- 2. thaemmayanh/hub/test.lua: Campfire ("CamnpfireRocky") checkpoint activation
+-- 3. Killer-hub (Proto 0.0) & lucas0conhecimento: ExitZone + Highest-Numbered Room progression + ProximityPrompts
 local function checkPBDungeonRoomTransition()
     refreshCharacterRefs()
     if not HumanoidRootPart then return false end
 
-    -- 1. Trigger all enabled ProximityPrompts in workspace (doors, gates, levers, room switches, chests)
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("ProximityPrompt") and obj.Enabled then
-            local p = obj.Parent
-            if p and p:IsA("Model") then
-                p = p.PrimaryPart or p:FindFirstChildWhichIsA("BasePart", true)
-            elseif p and not p:IsA("BasePart") then
-                p = p:FindFirstChildWhichIsA("BasePart", true) or (p.Parent and p.Parent:IsA("BasePart") and p.Parent)
-            end
-            if p and p:IsA("BasePart") then
-                pcall(function()
-                    HumanoidRootPart.CFrame = p.CFrame + Vector3.new(0, 3, 0)
-                    if fireproximityprompt then
-                        fireproximityprompt(obj)
-                    end
-                    obj:InputHoldBegin()
-                    task.wait(0.05)
-                    obj:InputHoldEnd()
-                end)
-                task.wait(0.12)
-            end
-        end
-    end
+    -- Clear combat follow lock while transitioning between rooms
+    State.PB_ActiveFollowMob = nil
+    State.PB_ActiveFollowPart = nil
 
-    -- 2. Safe-zone difficulty & BossRoom transitions (thaemmayanh/hub/test.lua + thha3203 v2..v5 + Vortex_PixelBlade)
+    -- 1. Safe-zone difficulty & BossRoom transitions (thha3203 v2..v5 + Vortex_PixelBlade)
     local worldTypeObj = workspace:FindFirstChild("worldType")
     local worldVal = worldTypeObj and tostring(worldTypeObj.Value) or ""
     local diffObj = workspace:FindFirstChild("difficulty")
@@ -1902,10 +1975,10 @@ local function checkPBDungeonRoomTransition()
         local bossRoom = workspace:FindFirstChild("BossRoom")
         if bossRoom and not State.PB_VisitedFinalRoom[bossRoom] then
             State.PB_VisitedFinalRoom[bossRoom] = true
-            task.wait(1.5)
-            if HumanoidRootPart and bossRoom.Parent then
-                HumanoidRootPart.CFrame = CFrame.new(bossRoom:GetPivot().Position)
-            end
+            local targetCF = CFrame.new(bossRoom:GetPivot().Position + Vector3.new(0, 5, 0))
+            State.PB_ActiveTargetCFrame = targetCF
+            HumanoidRootPart.CFrame = targetCF
+            task.wait(1.0)
             return true
         end
     end
@@ -1925,69 +1998,152 @@ local function checkPBDungeonRoomTransition()
 
         if diffVal == "Normal" and r6 and r7 and not State.PB_VisitedFinalRoom[r7] then
             State.PB_VisitedFinalRoom[r7] = true
-            task.wait(1.5)
-            if HumanoidRootPart and r7.Parent then
-                HumanoidRootPart.CFrame = CFrame.new(r7:GetPivot().Position)
-            end
+            local targetCF = CFrame.new(r7:GetPivot().Position + Vector3.new(0, 5, 0))
+            State.PB_ActiveTargetCFrame = targetCF
+            HumanoidRootPart.CFrame = targetCF
+            task.wait(1.0)
             return true
         elseif diffVal == "Heroic" and r7 and r8 and not State.PB_VisitedFinalRoom[r8] then
             State.PB_VisitedFinalRoom[r8] = true
-            task.wait(1.5)
-            if HumanoidRootPart and r8.Parent then
-                HumanoidRootPart.CFrame = CFrame.new(r8:GetPivot().Position)
-            end
+            local targetCF = CFrame.new(r8:GetPivot().Position + Vector3.new(0, 5, 0))
+            State.PB_ActiveTargetCFrame = targetCF
+            HumanoidRootPart.CFrame = targetCF
+            task.wait(1.0)
             return true
         elseif diffVal == "Nightmare" and r8 and r9 and not State.PB_VisitedFinalRoom[r9] then
             State.PB_VisitedFinalRoom[r9] = true
-            task.wait(1.5)
-            if HumanoidRootPart and r9.Parent then
-                HumanoidRootPart.CFrame = CFrame.new(r9:GetPivot().Position)
-            end
+            local targetCF = CFrame.new(r9:GetPivot().Position + Vector3.new(0, 5, 0))
+            State.PB_ActiveTargetCFrame = targetCF
+            HumanoidRootPart.CFrame = targetCF
+            task.wait(1.0)
             return true
         end
     end
 
-    -- 3. Killer-hub (Proto 0.0) & lucas0conhecimento ExitZone room progression
-    -- Loops through rooms in workspace:GetChildren() with an ExitZone, touches ExitZone.CFrame, waits 0.25s, then pivots into the room!
-    local now = tick()
-    if (now - (State.PB_LastExitZoneTime or 0)) >= 0.8 then
-        State.PB_LastExitZoneTime = now
-        local exitRooms = {}
-        for _, v in ipairs(workspace:GetChildren()) do
-            local ez = v:FindFirstChild("ExitZone")
-            if ez and ez:IsA("BasePart") then
-                local d = (ez.Position - HumanoidRootPart.Position).Magnitude
-                table.insert(exitRooms, { room = v, ez = ez, dist = d, used = State.PB_UsedExitZones[ez] and true or false })
-            end
-        end
-        table.sort(exitRooms, function(a, b)
-            if a.used ~= b.used then
-                return not a.used
-            end
-            return a.dist < b.dist
-        end)
-
-        for _, item in ipairs(exitRooms) do
-            if not State.Running or not Config.PB_AutoFarmDungeon then break end
-            -- Check if an enemy spawned after touching the previous ExitZone
-            local spawnedMob = findBestPBTarget(false)
-            if spawnedMob then
+    -- 2. Campfire Checkpoint Activation (thaemmayanh/hub/test.lua: CamnpfireRocky)
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and (obj.Name == "CamnpfireRocky" or obj.Name == "CampfireRocky") and not State.PB_VisitedCampfires[obj] then
+            local campPart = obj:FindFirstChildWhichIsA("BasePart", true)
+            if campPart then
+                State.PB_VisitedCampfires[obj] = true
+                local campCF = campPart.CFrame * CFrame.new(0, 3, 0)
+                State.PB_ActiveTargetCFrame = campCF
+                HumanoidRootPart.CFrame = campCF
+                if firetouchinterest then
+                    pcall(function()
+                        firetouchinterest(HumanoidRootPart, campPart, 0)
+                        firetouchinterest(HumanoidRootPart, campPart, 1)
+                    end)
+                end
+                for _, pr in ipairs(obj:GetDescendants()) do
+                    if pr:IsA("ProximityPrompt") and pr.Enabled then
+                        pcall(function()
+                            if fireproximityprompt then fireproximityprompt(pr) end
+                            pr:InputHoldBegin()
+                            pr:InputHoldEnd()
+                        end)
+                    end
+                end
+                task.wait(2.0)
                 return true
             end
-            State.PB_UsedExitZones[item.ez] = true
-            pcall(function()
-                HumanoidRootPart.CFrame = item.ez.CFrame
-                if firetouchinterest then
-                    firetouchinterest(HumanoidRootPart, item.ez, 0)
-                    firetouchinterest(HumanoidRootPart, item.ez, 1)
-                end
-                task.wait(0.25)
-                if item.room and item.room.Parent then
-                    HumanoidRootPart.CFrame = CFrame.new(item.room:GetPivot().Position)
-                end
-            end)
-            task.wait(0.15)
         end
+    end
+
+    -- 3. Trigger unvisited enabled ProximityPrompts on doors/gates/levers/progression objects
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") and obj.Enabled and not State.PB_UsedPrompts[obj] then
+            local p = obj.Parent
+            if p and p:IsA("Model") then
+                p = p.PrimaryPart or p:FindFirstChildWhichIsA("BasePart", true)
+            elseif p and not p:IsA("BasePart") then
+                p = p:FindFirstChildWhichIsA("BasePart", true) or (p.Parent and p.Parent:IsA("BasePart") and p.Parent)
+            end
+            if p and p:IsA("BasePart") then
+                State.PB_UsedPrompts[obj] = true
+                pcall(function()
+                    local promptCF = p.CFrame + Vector3.new(0, 3, 0)
+                    State.PB_ActiveTargetCFrame = promptCF
+                    HumanoidRootPart.CFrame = promptCF
+                    if fireproximityprompt then
+                        fireproximityprompt(obj)
+                    end
+                    obj:InputHoldBegin()
+                    task.wait(0.05)
+                    obj:InputHoldEnd()
+                end)
+                task.wait(0.15)
+                if findBestPBTarget(false) then
+                    return true
+                end
+            end
+        end
+    end
+
+    -- 4. ExitZone & Highest-Numbered Room Progression (Killer-hub Proto 0.0 & lucas0conhecimento)
+    local exitRooms = {}
+    local highestNumRoom = nil
+    local highestRoomNum = -1
+
+    for _, v in ipairs(workspace:GetChildren()) do
+        local rNum = tonumber(v.Name)
+        if rNum and rNum > highestRoomNum then
+            highestRoomNum = rNum
+            highestNumRoom = v
+        end
+        local ez = v:FindFirstChild("ExitZone") or v:FindFirstChild("ExitZone", true)
+        if ez and ez:IsA("BasePart") then
+            local d = (ez.Position - HumanoidRootPart.Position).Magnitude
+            table.insert(exitRooms, {
+                room = v,
+                roomNum = rNum or 0,
+                ez = ez,
+                dist = d,
+                used = State.PB_UsedExitZones[ez] and true or false
+            })
+        end
+    end
+
+    -- Sort: unused ExitZones first, then highest room number first, then closest
+    table.sort(exitRooms, function(a, b)
+        if a.used ~= b.used then
+            return not a.used
+        end
+        if a.roomNum ~= b.roomNum then
+            return a.roomNum > b.roomNum
+        end
+        return a.dist < b.dist
+    end)
+
+    for idx, item in ipairs(exitRooms) do
+        if idx > 3 or not State.Running or not Config.PB_AutoFarmDungeon then break end
+        if findBestPBTarget(false) then
+            return true
+        end
+        State.PB_UsedExitZones[item.ez] = true
+        pcall(function()
+            local ezCF = item.ez.CFrame + Vector3.new(0, 2.5, 0)
+            State.PB_ActiveTargetCFrame = ezCF
+            HumanoidRootPart.CFrame = ezCF
+            if firetouchinterest then
+                firetouchinterest(HumanoidRootPart, item.ez, 0)
+                firetouchinterest(HumanoidRootPart, item.ez, 1)
+            end
+            task.wait(0.22)
+            local destRoom = highestNumRoom or item.room
+            if destRoom and destRoom.Parent then
+                local roomCF = CFrame.new(destRoom:GetPivot().Position + Vector3.new(0, 5, 0))
+                State.PB_ActiveTargetCFrame = roomCF
+                HumanoidRootPart.CFrame = roomCF
+            end
+        end)
+        task.wait(0.18)
+    end
+
+    -- If all ExitZones were already tried once and still no mobs, reset UsedExitZones so next cycle re-triggers the newest room
+    if #exitRooms > 0 and exitRooms[1].used then
+        State.PB_UsedExitZones = {}
+        State.PB_UsedPrompts = {}
     end
 
     return false
@@ -1997,14 +2153,13 @@ end
 local function pbBringAndExpandTargets()
     refreshCharacterRefs()
     if not HumanoidRootPart then return end
-    local rawChar = getPBRawCharacter()
-    local sz = Vector3.new(Config.PB_HitboxSize or 35, Config.PB_HitboxSize or 35, Config.PB_HitboxSize or 35)
+    local sz = Vector3.new(Config.PB_HitboxSize or 40, Config.PB_HitboxSize or 40, Config.PB_HitboxSize or 40)
     local frontCF = HumanoidRootPart.CFrame * CFrame.new(0, 0, -4.5)
     local allModels = collectAllPBModels()
     local isAutoFarming = Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid
 
     for _, v in ipairs(allModels) do
-        if v and v.Parent and v ~= Character and v ~= rawChar and not isPBIgnoredModel(v) and not isPBChestModel(v) and isPBMobAlive(v) then
+        if v and v.Parent and not isPBIgnoredModel(v) and not isPBChestModel(v) and isPBMobAlive(v) then
             pcall(function()
                 local bh = v:FindFirstChild("basehitbox") or v:FindFirstChild("basehitbox", true)
                 if bh and bh:IsA("BasePart") and (Config.PB_ExpandHitbox or isAutoFarming or Config.PB_KillAura) then
@@ -2021,7 +2176,7 @@ local function pbBringAndExpandTargets()
                     if not Config.PB_AutoFarmRaid then
                         eHrp.Anchored = true
                     end
-                    if Config.PB_BringMobs and not isAutoFarming and (eHrp.Position - HumanoidRootPart.Position).Magnitude <= 35 then
+                    if Config.PB_BringMobs and not isAutoFarming and (eHrp.Position - HumanoidRootPart.Position).Magnitude <= 45 then
                         eHrp.CFrame = frontCF
                     end
                 end
@@ -2030,28 +2185,20 @@ local function pbBringAndExpandTargets()
     end
 end
 
--- Nearby Enemy & Breakable Killer (for standalone Kill Aura when AutoFarmDungeon/Raid is off)
+-- Nearby Enemy & Breakable Killer (Runs continuously for Kill Aura AND during Dungeon/Raid Farm!)
 local function pbKillAllNearby(maxRange, isRaid)
     refreshCharacterRefs()
     local pbRemotes = getPBRemotes()
     if not pbRemotes or not HumanoidRootPart then return end
 
-    local rawChar = getPBRawCharacter()
     local myPos = HumanoidRootPart.Position
-    local rangeLimit = maxRange or 60
+    local rangeLimit = maxRange or 100
     local wpnDmg = currentPBWeaponDamage()
     local hasActiveTarget = false
 
-    applyPBTempBuffAndHeal(false)
-    pbBringAndExpandTargets()
-
-    if Config.PB_AutoBreakables then
-        pbBreakAllBreakablesRemotely()
-    end
-
     local allModels = collectAllPBModels()
     for _, v in ipairs(allModels) do
-        if v and v.Parent and v ~= Character and v ~= rawChar and not isPBIgnoredModel(v) and isPBTrueEnemy(v, isRaid) then
+        if v and v.Parent and isPBTrueEnemy(v, isRaid) then
             local part = getPBMobTargetPart(v)
             local dist = part and (part.Position - myPos).Magnitude or math.huge
             if dist <= rangeLimit then
@@ -2681,11 +2828,22 @@ table.insert(State.Connections, RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- Pixel Blade Active Farm Velocity Zeroing & Noclip (Exact thha3203 v2..v5 & Vortex_PixelBlade sub[28..29] Heartbeat)
-    -- Does NOT overwrite hrp.CFrame at 60FPS so server replication & melee hit checks never desync!
+    -- Pixel Blade Active Farm Continuous Aerial Follow, Velocity Zeroing & Noclip (thaemmayanh + thha3203)
     if Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid then
         HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
         HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
+
+        if State.PB_ActiveFollowMob and State.PB_ActiveFollowPart and State.PB_ActiveFollowMob.Parent and isPBMobAlive(State.PB_ActiveFollowMob) then
+            local cf = pbComputeCombatCFrame(State.PB_ActiveFollowMob, State.PB_ActiveFollowPart)
+            if cf then
+                State.PB_ActiveTargetCFrame = cf
+                HumanoidRootPart.CFrame = cf
+            end
+        else
+            State.PB_ActiveFollowMob = nil
+            State.PB_ActiveFollowPart = nil
+        end
+
         local rawChar = getPBRawCharacter()
         for _, ch in ipairs({ Character, rawChar }) do
             if ch then
@@ -2769,35 +2927,102 @@ table.insert(State.Connections, RunService.Heartbeat:Connect(function()
     end
 end))
 
--- 2. Pixel Blade Auto Farm Loop (v3.7 Multi-Script Engine: thha3203 + Vortex + TexRBLX + Killer-hub + Mana-scripts)
+-- 2A. Dedicated Pixel Blade Kill Aura + Tornado Mass Kill Loop (Independent Non-Blocking Thread)
+task.spawn(function()
+    while State.Running do
+        task.wait(0.15)
+        if Config.PB_KillAura or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid then
+            pcall(function()
+                local range = (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) and 150 or (Config.PB_KillAuraRange or 100)
+                pbKillAllNearby(range, Config.PB_AutoFarmRaid)
+            end)
+        end
+    end
+end)
+
+-- 2B. Dedicated Pixel Blade Remote Breakables Destroyer Loop (Independent Non-Blocking Thread)
+task.spawn(function()
+    while State.Running do
+        task.wait(0.25)
+        if Config.PB_AutoBreakables or Config.PB_AutoFarmDungeon then
+            pcall(pbBreakAllBreakablesRemotely)
+        end
+    end
+end)
+
+-- 2C. Dedicated Pixel Blade Auto Pick Upgrades & Popup Off-Screen Mover Loop (Independent Non-Blocking Thread)
+task.spawn(function()
+    while State.Running do
+        task.wait(0.15)
+        if Config.PB_AutoUpgrade then
+            pcall(function()
+                local pbRemotes = getPBRemotes()
+                local upgRemote = pbRemotes and pbRemotes:FindFirstChild("plrUpgrade")
+                if upgRemote then
+                    upgRemote:FireServer(math.random(1, 3))
+                end
+
+                if VirtualInputManager then
+                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Two, false, game)
+                    task.wait(0.03)
+                    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Two, false, game)
+                end
+
+                local gameUI = PlayerGui:FindFirstChild("gameUI")
+                local upgFrame = gameUI and gameUI:FindFirstChild("upgradeFrame")
+                if upgFrame then
+                    -- Also click any upgrade option buttons inside upgradeFrame for Mobile compatibility
+                    if upgFrame.Visible then
+                        for _, desc in ipairs(upgFrame:GetDescendants()) do
+                            if desc:IsA("GuiButton") and desc.Visible then
+                                activateGuiButton(desc)
+                                break
+                            end
+                        end
+                    end
+                    -- Move upgradeFrame off-screen WITHOUT setting Visible = false (Mana-scripts / thha3203)
+                    if Config.PB_HideUpgradePopup then
+                        upgFrame.Position = UDim2.new(0, 0, -1.1, 0)
+                    end
+                end
+
+                if Config.PB_HideUpgradePopup then
+                    local dBlur = Lighting:FindFirstChild("deathBlur")
+                    if dBlur then dBlur.Size = 0 end
+                    local sBlur = Lighting:FindFirstChild("screenBlur")
+                    if sBlur then sBlur.Size = 0 end
+                end
+            end)
+        end
+    end
+end)
+
+-- 2D. Dedicated Pixel Blade God Buff, Auto Heal & Auto Block Loop (Independent Non-Blocking Thread)
+task.spawn(function()
+    while State.Running do
+        task.wait(0.3)
+        if Config.PB_GodBuffAndHeal or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_KillAura then
+            pcall(applyPBTempBuffAndHeal, false)
+        end
+    end
+end)
+
+-- 2E. Dedicated Pixel Blade Hitbox Expander & Enemy Anchor/Bring Loop (Independent Non-Blocking Thread)
 task.spawn(function()
     while State.Running do
         task.wait(0.2)
-        local pbRemotes = getPBRemotes()
-        if pbRemotes then
+        if Config.PB_ExpandHitbox or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_BringMobs then
+            pcall(pbBringAndExpandTargets)
+        end
+    end
+end)
+
+-- 2F. Dedicated Pixel Blade Dungeon & Raid Auto Farm Movement + Room Transition Loop (Independent Thread)
+task.spawn(function()
+    while State.Running do
+        task.wait(0.1)
+        pcall(function()
             refreshCharacterRefs()
-
-            -- Maintain 1-Shot Damage Buff (once per character life) & Auto Heal (every 0.5s)
-            if Config.PB_GodBuffAndHeal or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_KillAura then
-                applyPBTempBuffAndHeal(false)
-            end
-
-            -- Remote Breakables Destroyer (Mana-scripts: breaks all "breakable" objects without moving player!)
-            if Config.PB_AutoBreakables or Config.PB_AutoFarmDungeon then
-                pcall(pbBreakAllBreakablesRemotely)
-            end
-
-            -- Standalone Kill Aura (when Dungeon/Raid farm isn't running)
-            if Config.PB_KillAura and not (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) then
-                pcall(pbKillAllNearby, Config.PB_KillAuraRange or 65, false)
-            end
-
-            -- Expand Enemy Hitboxes & Anchor Active Mobs
-            if Config.PB_ExpandHitbox or Config.PB_AutoFarmDungeon then
-                pcall(pbBringAndExpandTargets)
-            end
-
-            -- Auto Farm Dungeon / Raid Combat & Room Progression
             if (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) and HumanoidRootPart then
                 local isRaid = Config.PB_AutoFarmRaid
                 local cutscene = workspace:FindFirstChild("inCutscene")
@@ -2806,90 +3031,72 @@ task.spawn(function()
                 if not inCutscene then
                     local mob, mobPart = findBestPBTarget(isRaid)
                     if mob and mobPart then
-                        pcall(function()
-                            local dist = math.floor((mobPart.Position - HumanoidRootPart.Position).Magnitude)
-                            local hp = math.floor(getPBMobCurrentHP(mob))
-                            State.PB_DungeonStatusText = string.format(
-                                "⚔️ يهاجم: %s | المسافة: %d | HP: %d | سلاحك: %d",
-                                tostring(mob.Name), dist, hp, currentPBWeaponDamage()
-                            )
+                        local dist = math.floor((mobPart.Position - HumanoidRootPart.Position).Magnitude)
+                        local hp = math.floor(getPBMobCurrentHP(mob))
+                        State.PB_DungeonStatusText = string.format(
+                            "⚔️ يهاجم: %s | المسافة: %d | HP: %d | سلاحك: %d",
+                            tostring(mob.Name), dist, hp, currentPBWeaponDamage()
+                        )
 
-                            -- Korth Boss Room Entrance & BookHand Handling (thha3203 pixel-blade-v3)
-                            if (mob.Name == "Korth" or mob.Name == "CorruptKorth") and not State.PB_EnteredKorthRoom then
-                                HumanoidRootPart.CFrame = CFrame.new(169, 197, 7028)
-                                task.wait(3)
-                                State.PB_EnteredKorthRoom = true
-                            end
+                        -- Korth Boss Room Entrance & BookHand Handling (thha3203 pixel-blade-v3 & thaemmayanh)
+                        if (mob.Name == "Korth" or mob.Name == "CorruptKorth") and not State.PB_EnteredKorthRoom then
+                            State.PB_ActiveFollowMob = nil
+                            State.PB_ActiveFollowPart = nil
+                            HumanoidRootPart.CFrame = CFrame.new(169, 197, 7028)
+                            task.wait(2.5)
+                            State.PB_EnteredKorthRoom = true
+                        end
 
-                            -- Atticus Vault Entrance Handling (thha3203 v2..v5 & Vortex_PixelBlade)
-                            if mob.Name == "Atticus" and not State.PB_EnteredBossRoom then
-                                local vault = workspace:FindFirstChild("Vault")
-                                if vault then
-                                    pbPositionAtTarget(mob, mobPart, true)
-                                    task.wait(3.5)
-                                    if HumanoidRootPart and vault.Parent then
-                                        HumanoidRootPart.CFrame = CFrame.new(vault:GetPivot().Position)
-                                    end
-                                    State.PB_EnteredBossRoom = true
-                                    task.wait(0.3)
+                        -- Atticus Vault Entrance Handling (thha3203 v2..v5 & Vortex_PixelBlade)
+                        if mob.Name == "Atticus" and not State.PB_EnteredBossRoom then
+                            local vault = workspace:FindFirstChild("Vault")
+                            if vault then
+                                pbPositionAtTarget(mob, mobPart, true)
+                                task.wait(3.0)
+                                if HumanoidRootPart and vault.Parent then
+                                    State.PB_ActiveFollowMob = nil
+                                    State.PB_ActiveFollowPart = nil
+                                    HumanoidRootPart.CFrame = CFrame.new(vault:GetPivot().Position + Vector3.new(0, 5, 0))
                                 end
+                                State.PB_EnteredBossRoom = true
+                                task.wait(0.3)
                             end
+                        end
 
-                            -- Position 8 studs behind enemy ONLY when distance >= 10 (thha3203 v2..v5 & Vortex_PixelBlade)
-                            pbPositionAtTarget(mob, mobPart, false)
+                        -- Fly to enemy & lock follow target for 60FPS Heartbeat tracking
+                        pbPositionAtTarget(mob, mobPart, true)
 
-                            -- Execute weapon swing + onHit + Tornado abilityHit mass kill
-                            pbDamageModel(mob, currentPBWeaponDamage())
-                            pbMassKillWithTornado()
-                            if mob.Name == "Atticus" then
-                                pbPerformRealM1Attack()
-                            end
-                        end)
+                        -- Execute multi-vector weapon swing + onHit + Tornado abilityHit + M1
+                        pbDamageModel(mob, currentPBWeaponDamage())
+                        pbMassKillWithTornado()
+                        pbPerformRealM1Attack()
                     elseif Config.PB_AutoFarmDungeon then
-                        State.PB_DungeonStatusText = "🏃 الغرفة نظيفة: جاري تفعيل البوابات (ExitZone) وفتح الصناديق..."
-                        pcall(checkPBDungeonRoomTransition)
-                        pcall(pbOpenAllChestsNow)
+                        State.PB_ActiveFollowMob = nil
+                        State.PB_ActiveFollowPart = nil
+                        State.PB_DungeonStatusText = "🏃 الغرفة نظيفة: جاري الانتقال للغرفة التالية وفتح الصناديق..."
+                        checkPBDungeonRoomTransition()
+                        pbOpenAllChestsNow()
                     else
+                        State.PB_ActiveFollowMob = nil
+                        State.PB_ActiveFollowPart = nil
                         State.PB_DungeonStatusText = "⏳ في انتظار ظهور وحوش الغارة..."
                     end
                 else
+                    State.PB_ActiveFollowMob = nil
+                    State.PB_ActiveFollowPart = nil
                     State.PB_DungeonStatusText = "🎬 مشهد سينمائي (Cutscene)..."
                 end
             else
+                State.PB_ActiveFollowMob = nil
+                State.PB_ActiveFollowPart = nil
                 State.PB_DungeonStatusText = "متوقف (جاهز للتشغيل)"
             end
-
-            -- Auto Pick Dungeon Upgrades & Dismiss Upgrade UI / Blur (Killer-hub Proto 0.1 + Mana-scripts + thha3203)
-            if Config.PB_AutoUpgrade then
-                pcall(function()
-                    local upgRemote = pbRemotes:FindFirstChild("plrUpgrade")
-                    if upgRemote then
-                        upgRemote:FireServer(math.random(1, 3))
-                    end
-                    if VirtualInputManager then
-                        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Two, false, game)
-                        task.wait(0.02)
-                        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Two, false, game)
-                    end
-                    if Config.PB_HideUpgradePopup then
-                        local dBlur = Lighting:FindFirstChild("deathBlur")
-                        if dBlur then dBlur.Size = 0 end
-                        local sBlur = Lighting:FindFirstChild("screenBlur")
-                        if sBlur then sBlur.Size = 0 end
-                        local gameUI = PlayerGui:FindFirstChild("gameUI")
-                        local upgFrame = gameUI and gameUI:FindFirstChild("upgradeFrame")
-                        if upgFrame then
-                            upgFrame.Visible = false
-                            upgFrame.Position = UDim2.new(0, 0, -1.2, 0)
-                        end
-                    end
-                end)
-            end
-        end
+        end)
     end
 end)
 
 -- 3. Pixel Blade Slow Automation Loop (Chests, Wishes, Quests, Portal Auto-Join)
+local CachedPBQuestData = nil
 task.spawn(function()
     while State.Running do
         task.wait(1.0)
@@ -2900,13 +3107,15 @@ task.spawn(function()
                 pcall(pbOpenAllChestsNow)
             end
 
-            -- Auto Open Wishes
+            -- Auto Open Wishes (Non-blocking async InvokeServer)
             if Config.PB_AutoOpenWishes then
-                pcall(function()
-                    local openWish = pbRemotes:FindFirstChild("openWish")
-                    if openWish then
-                        openWish:InvokeServer()
-                    end
+                task.spawn(function()
+                    pcall(function()
+                        local openWish = pbRemotes:FindFirstChild("openWish")
+                        if openWish then
+                            openWish:InvokeServer()
+                        end
+                    end)
                 end)
             end
 
@@ -2925,20 +3134,27 @@ task.spawn(function()
             end
 
             if Config.PB_AutoClaimAchievements then
-                pcall(function()
-                    local dq = pbRemotes:FindFirstChild("dailyQuestEvent")
-                    local constants = ReplicatedStorage:FindFirstChild("constants")
-                    local qDataMod = constants and constants:FindFirstChild("questData")
-                    if dq and qDataMod then
-                        local qData = require(qDataMod)
-                        if qData and qData.Achievements then
-                            for _, ach in pairs(qData.Achievements) do
-                                if ach and ach.id then
-                                    dq:FireServer("Claim", ach.id, true)
+                task.spawn(function()
+                    pcall(function()
+                        local dq = pbRemotes:FindFirstChild("dailyQuestEvent")
+                        local constants = ReplicatedStorage:FindFirstChild("constants")
+                        local qDataMod = constants and constants:FindFirstChild("questData")
+                        if dq and qDataMod then
+                            if not CachedPBQuestData then
+                                local ok, res = pcall(require, qDataMod)
+                                if ok and type(res) == "table" then
+                                    CachedPBQuestData = res
+                                end
+                            end
+                            if CachedPBQuestData and CachedPBQuestData.Achievements then
+                                for _, ach in pairs(CachedPBQuestData.Achievements) do
+                                    if ach and ach.id then
+                                        dq:FireServer("Claim", ach.id, true)
+                                    end
                                 end
                             end
                         end
-                    end
+                    end)
                 end)
             end
 
@@ -3521,8 +3737,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v3.7 | Pixel Blade [World 5: CHRONOS]"
-    or "⚔️ Delta Hub v3.7 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v3.8 | Pixel Blade [World 5: CHRONOS]"
+    or "⚔️ Delta Hub v3.8 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -3671,10 +3887,12 @@ local function addSectionHeader(parent, text)
 end
 
 local function addToggle(parent, labelText, initialVal, callback)
-    local row = Instance.new("Frame")
+    local row = Instance.new("TextButton")
     row.Size = UDim2.new(1, 0, 0, 36)
     row.BackgroundColor3 = Color3.fromRGB(30, 32, 44)
     row.BorderSizePixel = 0
+    row.Text = ""
+    row.AutoButtonColor = true
     row.Parent = parent
 
     local rCorner = Instance.new("UICorner")
@@ -3707,13 +3925,22 @@ local function addToggle(parent, labelText, initialVal, callback)
     tCorner.CornerRadius = UDim.new(0, 6)
     tCorner.Parent = toggleBtn
 
-    toggleBtn.MouseButton1Click:Connect(function()
+    local lastClick = 0
+    local function doToggle()
+        local now = tick()
+        if (now - lastClick) < 0.12 then
+            return
+        end
+        lastClick = now
         state = not state
         toggleBtn.BackgroundColor3 = state and Color3.fromRGB(60, 195, 105) or Color3.fromRGB(60, 62, 78)
         toggleBtn.Text = state and "ON" or "OFF"
         pcall(callback, state)
         saveConfig()
-    end)
+    end
+
+    toggleBtn.MouseButton1Click:Connect(doToggle)
+    row.MouseButton1Click:Connect(doToggle)
 end
 
 local function addCycleButton(parent, labelText, options, currentVal, callback)
@@ -3880,12 +4107,12 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v3.7 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v3.8 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
     DungeonStatusBox.BackgroundColor3 = Color3.fromRGB(28, 38, 34)
-    DungeonStatusBox.Text = "🗡️ الحالة: متوقف (جاهز للتشغيل)"
+    DungeonStatusBox.Text = "🗡️ الحالة: جاهز ويعمل تلقائياً"
     DungeonStatusBox.TextColor3 = Color3.fromRGB(115, 245, 165)
     DungeonStatusBox.Font = Enum.Font.GothamBold
     DungeonStatusBox.TextSize = 11
@@ -3913,6 +4140,8 @@ if CurrentGame == "PixelBlade" then
         State.PB_UsedExitZones = {}
         State.PB_CompletedProps = {}
         if not val then
+            State.PB_ActiveFollowMob = nil
+            State.PB_ActiveFollowPart = nil
             State.PB_ActiveTargetCFrame = nil
         else
             applyPBTempBuffAndHeal(true)
@@ -3922,6 +4151,8 @@ if CurrentGame == "PixelBlade" then
     addToggle(TabPBFarm, "فارم الغارات التلقائي (Auto Farm Raids)", Config.PB_AutoFarmRaid, function(val)
         Config.PB_AutoFarmRaid = val
         if not val then
+            State.PB_ActiveFollowMob = nil
+            State.PB_ActiveFollowPart = nil
             State.PB_ActiveTargetCFrame = nil
         else
             applyPBTempBuffAndHeal(true)
@@ -3961,7 +4192,8 @@ if CurrentGame == "PixelBlade" then
     addActionButton(TabPBFarm, "💥 قتل الأعداء وتكسير الصناديق المحيطة فوراً (Kill & Break Nearby)", function()
         task.spawn(function()
             applyPBTempBuffAndHeal(true)
-            pbKillAllNearby(85, true)
+            pbBreakAllBreakablesRemotely()
+            pbKillAllNearby(150, true)
         end)
     end)
 
@@ -4332,6 +4564,8 @@ addActionButton(TabSecurity, "🚨 زر الطوارئ: إيقاف كل التف
     Config.PB_AutoFish = false
     State.IsTSHovering = false
     State.TSHoverPos = nil
+    State.PB_ActiveFollowMob = nil
+    State.PB_ActiveFollowPart = nil
     State.PB_ActiveTargetCFrame = nil
     saveConfig()
     pbReleaseEUp(nil, State.PB_CachedFishPrompt)
@@ -4350,6 +4584,7 @@ addActionButton(TabSecurity, "🗑️ مسح الإعدادات المحفوظة
         end)
     end
     if getgenv then
+        getgenv().AOTR_SavedConfig_v38 = nil
         getgenv().AOTR_SavedConfig = nil
     end
 end)
@@ -4434,6 +4669,8 @@ local function cleanupScript()
     Config.PB_AutoFarmRaid = false
     Config.PB_KillAura = false
     Config.PB_AutoFish = false
+    State.PB_ActiveFollowMob = nil
+    State.PB_ActiveFollowPart = nil
     State.PB_ActiveTargetCFrame = nil
     pbReleaseEUp(nil, State.PB_CachedFishPrompt)
     pcall(function()
@@ -4466,4 +4703,15 @@ if getgenv then
     getgenv().AOTR_Delta_Cleanup = cleanupScript
 end
 
-print("[🛡️ Delta Hub v3.4] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+-- Initial Pixel Blade Startup Boost (God Buff + Heal + Block + Chest Open)
+if CurrentGame == "PixelBlade" then
+    task.spawn(function()
+        task.wait(0.3)
+        pcall(applyPBTempBuffAndHeal, true)
+        if Config.PB_AutoOpenChests then
+            pcall(pbOpenAllChestsNow)
+        end
+    end)
+end
+
+print("[🛡️ Delta Hub v3.8] Loaded! Active Game Detected: " .. tostring(CurrentGame))
