@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v4.8 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v4.9 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Crash-Free Auto-Clicker M1 + Healer/Drainer #1 Priority v4.8)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Crash-Free Auto-Clicker M1 + Healer/Drainer #1 Priority v4.9)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -2183,11 +2183,9 @@ local function pbPerformRealM1Attack()
                         VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, true, game, 1)
                         task.wait(0.02)
                         VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, false, game, 1)
-                    else
-                        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                        task.wait(0.02)
-                        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
                     end
+                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
                 end)
                 State.PB_M1ClickInFlight = false
             end)
@@ -3338,15 +3336,18 @@ task.spawn(function()
                     State.PB_ActiveFollowPart = nil
                     State.PB_DungeonStatusText = "🎬 مشهد سينمائي (Cutscene)..."
                 end
-            else
+            elseif Config.PB_AutoClicker and HumanoidRootPart then
                 State.PB_ActiveFollowMob = nil
                 State.PB_ActiveFollowPart = nil
-                State.PB_DungeonStatusText = "متوقف (جاهز للتشغيل)"
-            elseif Config.PB_AutoClicker and HumanoidRootPart then
                 local cutscene = workspace:FindFirstChild("inCutscene")
                 if not (cutscene and cutscene.Value == true) then
                     pbPerformRealM1Attack()
                 end
+                State.PB_DungeonStatusText = "🗡️ الأوتو كليكر يعمل..."
+            else
+                State.PB_ActiveFollowMob = nil
+                State.PB_ActiveFollowPart = nil
+                State.PB_DungeonStatusText = "متوقف (جاهز للتشغيل)"
             end
         end)
     end
@@ -4006,8 +4007,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v4.8 | Pixel Blade [Crash-Free Auto-Clicker + Healer #1]"
-    or "⚔️ Delta Hub v4.8 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v4.9 | Pixel Blade [Crash-Free Auto-Clicker + Healer #1]"
+    or "⚔️ Delta Hub v4.9 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -4376,7 +4377,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v4.8 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v4.9 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -4991,4 +4992,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v4.8] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v4.9] Loaded! Active Game Detected: " .. tostring(CurrentGame))

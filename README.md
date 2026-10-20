@@ -1,4 +1,4 @@
-# ⚔️🗡️ Multi-Game Delta Hub [PROTECTED v4.8]
+# ⚔️🗡️ Multi-Game Delta Hub [PROTECTED v4.9]
 
 سكربت شامل ومحمي بالكامل لتطبيق **Delta Executor** (جوال Android / iOS وكمبيوتر PC) يدعم لعبتين في رابط واحد مع **كشف تلقائي للعبة وعزل كامل للتبويبات**:
 
@@ -17,18 +17,11 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/slam27893-del/Ata/mai
 
 ---
 
-## 🔥 ما الجديد في التحديث (v4.8)؟
+## 🔥 ما الجديد في التحديث (v4.9)؟
 
-### 1️⃣ إصلاح الكراش الفوري عند تفعيل السكربت (`100% Crash-Free Pure Auto-Clicker`) 🛡️
-- **سبب الكراش (الخروج من تطبيق روبلوكس) في `v4.7`**:
-  1. في `v4.7` تمت إضافة استدعاء `VirtualUser:CaptureController()` + `VirtualUser:ClickButton1` بالتزامن مع `firesignal(o.Activated)` و `getconnections` وحلقة `Loop 2G` التي تعمل منذ أول لحظة لتشغيل السكربت، وهو ما يسبب **انهياراً أصلياً (Native C++ Crash) في محرك روبلوكس على أندرويد (Delta Android)** يغلق التطبيق فوراً!
-- **الحل الجذري في `v4.8`**:
-  - **إزالة `VirtualUser` و `firesignal` و `getconnections` و `Loop 2G` وتعديل جدول `getsenv` بالكامل من نظام الأوتو كليكر!**
-  - الاعتماد **حصرياً** على `VirtualInputManager:SendMouseButtonEvent` الرسمي الآمن 100% على أندرويد وPC، مع النقر الدقيق على مركز زر السيف (`🗡️`) بالإحداثيات المقاسة من شاشة الجوال (`0.7855, 0.6962`) والتحقق من عدم تغطية نافذة السكربت لزر السيف.
-
-### 2️⃣ أولوية قصوى للأعداء الذين يستنزفون أو يعالجون الأعداء الآخرين (`Healer / Drainer #1 Priority`) 💉
-- **دون أي تعديل على نظام تنقل الغرف أو الأداء (`Zero Lag`)**:
-  1. **الأولوية الأولى داخل الغرفة الحالية (`💉 [معالج/مستنزف]`)**: أي عدو يمتلك شعاع علاج أو استنزاف نشط (`Beam` / `Tether` / `Heal` / `Drain` / `Siphon` / `Leech`) أو ينتمي لفئة المعالجين والمستنزفين (`Healer`, `Priest`, `Shaman`, `Druid`, `Cultist`, `Witch`, `MoonWitch`, `BloodDemon`, `Vampire`, `Eyeball`, `Necromancer`, `Totem`, `Siphoner`, إلخ).
-  2. **الأولوية الثانية (`🏹 [بعيد المدى]`)**: الأعداء الذين يضربون من بعيد (`Archer`, `Bow`, `Crossbow`, `Cannon`, إلخ).
-  3. **الأولوية الثالثة (`⚔️`)**: باقي وحوش الاشتباك القريب في نفس الغرفة.
-  4. **شلّ وضرب جميع المعالجين والمستنزفين في الغرفة في نفس اللحظة** عبر `onHit` + `abilityHit (stun = 2s)`.
+### 1️⃣ إصلاح ظهور الواجهة وإزالة الكراش نهائياً (`v4.9 Syntax & Crash Fix`) 🛡️
+- **سبب عدم ظهور الواجهة في `v4.8`**: كان هناك خطأ في ترتيب `else ... elseif` عند السطر `3345` داخل `Loop 2F` تسبب في إيقاف تحميل ملف `loadstring` قبل بناء الواجهة.
+- **الحل في `v4.9`**:
+  - تصحيح ترتيب `elseif Config.PB_AutoClicker and HumanoidRootPart then ... else` بالكامل والتحقق الآلي من قواعد اللغة (`if/elseif/else/end`) في كامل الملف.
+  - الإبقاء على نظام الأوتو كليكر الآمن 100% عبر `VirtualInputManager:SendMouseButtonEvent` بدون أي دوال تسبب كراش على الجوال (`VirtualUser` / `firesignal` / `getconnections`).
+  - الإبقاء على **أولوية الأعداء الذين يستنزفون أو يعالجون الأعداء الآخرين (`💉 [معالج/مستنزف]`) كأولوية رقم #1** مع تنقل الغرف السليم من `v4.6` بدون أي لاق.
