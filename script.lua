@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v4.3 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v4.4 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Zero-Lag Mobile Jump-Click v4.3)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Zero-Lag Overhead Jump-Click + Ranged Priority v4.4)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -1553,13 +1553,102 @@ local function findAliveBookHand()
     return nil, nil
 end
 
--- Strict Step-by-Step Closest Enemy Finder (v4.3 Anti-Boss-Jump Engine):
+-- Zero-Lag Cached Ranged Enemy Detector (Bow, Crossbow, Magic, Mage, Witch, Eyeball, Cannon, Thrower, etc.)
+-- Inspects each enemy model AT MOST ONCE and caches the boolean in a weak-key table (O(1) lookup, ZERO lag!).
+local PB_RANGED_ENEMY_CACHE = setmetatable({}, { __mode = "k" })
+
+local PB_RANGED_NAME_KEYWORDS = {
+    -- Bow / Crossbow / Marksman / Thrower / Artillery
+    "archer", "bow", "crossbow", "marksman", "sniper", "ranger", "hunter", "shooter",
+    "gunner", "gun", "cannon", "fleshcannon", "mortar", "artillery", "thrower", "bomber",
+    "lobber", "catapult", "ballista", "turret", "spitter", "blaster", "harpoon", "javelin",
+    "slinger", "sling", "dart", "blowpipe", "chakram", "boomerang", "ranged",
+    -- Magic / Mage / Witch / Caster / Summoner / Cultist
+    "mage", "wizard", "witch", "moonwitch", "corruptmoonwitch", "sorcerer", "warlock",
+    "necromancer", "lich", "shaman", "priest", "cleric", "cultist", "acolyte", "caster",
+    "spell", "magic", "magician", "summoner", "conjurer", "invoker", "elementalist",
+    "pyromancer", "cryomancer", "hydromancer", "electromancer", "geomancer", "chronomancer",
+    "astromancer", "biomancer", "druid", "chanter", "enchanter", "illusionist", "alchemist",
+    "arcanist", "arcane", "occult", "mystic", "oracle", "prophet", "seer", "siren",
+    "banshee", "harpy", "wisp", "spirit", "phantom", "specter", "spectre", "wraith",
+    -- Pixel Blade Specific Projectile / Beam / Ranged Mobs (World 1-5 & Raids)
+    "eyeball", "corrupteyeball", "watcher", "gazer", "beholder", "overseer",
+    "infestedtree", "corruptinfestedtree", "laser", "beam", "orb", "crystal",
+    "obelisk", "totem", "conduit", "beacon", "spore", "shroom", "jellyfish",
+    "squid", "octopus", "eel", "angler"
+}
+
+local PB_RANGED_WEAPON_KEYWORDS = {
+    "bow", "crossbow", "quiver", "arrow", "bolt", "staff", "wand", "scepter",
+    "tome", "spellbook", "grimoire", "orb", "cannon", "gun", "rifle", "pistol",
+    "launcher", "projectile", "fireball", "magic", "beam", "laser", "cast", "harpoon"
+}
+
+local function pbIsRangedEnemy(model)
+    if not model then return false end
+    local cached = PB_RANGED_ENEMY_CACHE[model]
+    if cached ~= nil then
+        return cached
+    end
+
+    local isRanged = false
+    pcall(function()
+        local nameLow = string.lower(model.Name or "")
+        for _, kw in ipairs(PB_RANGED_NAME_KEYWORDS) do
+            if string.find(nameLow, kw, 1, true) then
+                isRanged = true
+                return
+            end
+        end
+
+        -- Check model attributes if any
+        local atkType = model:GetAttribute("AttackType") or model:GetAttribute("Class") or model:GetAttribute("Type")
+        if type(atkType) == "string" then
+            local al = string.lower(atkType)
+            for _, kw in ipairs(PB_RANGED_NAME_KEYWORDS) do
+                if string.find(al, kw, 1, true) then
+                    isRanged = true
+                    return
+                end
+            end
+        end
+
+        -- Check direct children and 1-level nested weapon/tool parts (runs only ONCE per enemy spawn!)
+        for _, child in ipairs(model:GetChildren()) do
+            local cn = string.lower(child.Name or "")
+            for _, kw in ipairs(PB_RANGED_WEAPON_KEYWORDS) do
+                if string.find(cn, kw, 1, true) then
+                    isRanged = true
+                    return
+                end
+            end
+            if child:IsA("Model") or child:IsA("Folder") or child:IsA("Tool") or child:IsA("Accessory") then
+                for _, sub in ipairs(child:GetChildren()) do
+                    local sn = string.lower(sub.Name or "")
+                    for _, kw in ipairs(PB_RANGED_WEAPON_KEYWORDS) do
+                        if string.find(sn, kw, 1, true) then
+                            isRanged = true
+                            return
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    PB_RANGED_ENEMY_CACHE[model] = isRanged
+    return isRanged
+end
+
+-- Strict Step-by-Step Closest Enemy Finder (v4.4 Ranged-First + Anti-Boss-Jump Engine):
 -- 1. Living BookHand (Korth boss shield phase)
 -- 2. Enemies in CURRENT ROOM (within 85 studs of player):
---    - Ranged (Archer/Mage) within 85 studs first, then hadEntrance == true within 85 studs, then any living mob within 85 studs.
+--    - Priority 2A: Ranged enemies (Bow/Archer, Magic/Mage, Witch, Eyeball, Cannon, etc.) with hadEntrance == true first!
+--    - Priority 2B: Any living Ranged enemy in the current room (<= 85 studs)!
+--    - Priority 2C: Melee enemies with hadEntrance == true in the current room (<= 85 studs).
+--    - Priority 2D: Any remaining living enemy in the current room (<= 85 studs).
 -- 3. ONLY when 100% of enemies within 85 studs are dead:
---    - Picks the SINGLE CLOSEST living enemy by distance (distFromMe), strictly capped to <= 190 studs (adjacent next room)
---      so the player NEVER jumps across the map (350+ studs) into the Boss Arena after Room 1!
+--    - Picks the SINGLE CLOSEST adjacent room (<= 190 studs), and if that room has a ranged enemy within +30 studs of its front, targets the ranged enemy first!
 local function findBestPBTarget(isRaid)
     refreshCharacterRefs()
     if not Character or not HumanoidRootPart then return nil, nil end
@@ -1572,10 +1661,12 @@ local function findBestPBTarget(isRaid)
         return bhMob, bhPart
     end
 
+    local currentRangedActiveMob, currentRangedActivePart, currentRangedActiveDist = nil, nil, math.huge
     local currentRangedMob, currentRangedPart, currentRangedDist = nil, nil, math.huge
     local currentActiveMob, currentActivePart, currentActiveDist = nil, nil, math.huge
     local currentRoomMob, currentRoomPart, currentRoomDist = nil, nil, math.huge
     local nextAdjacentMob, nextAdjacentPart, nextAdjacentDist = nil, nil, math.huge
+    local nextAdjacentRangedMob, nextAdjacentRangedPart, nextAdjacentRangedDist = nil, nil, math.huge
 
     -- Allow up to 190 studs for the immediately adjacent next room; if 0 mobs within 190 studs for > 4.0s, allow up to 270 studs
     local sinceLastRoom = State.PB_LastActiveRoomTime and (now - State.PB_LastActiveRoomTime) or 0
@@ -1602,16 +1693,24 @@ local function findBestPBTarget(isRaid)
                     end)
                     local distFromMe = (mobPos - myPos).Magnitude
                     local hadEnt = v:GetAttribute("hadEntrance")
+                    local isRanged = pbIsRangedEnemy(v)
 
                     if isRaid or distFromMe <= 85 or v:FindFirstChild("worm") then
                         -- Enemy is inside the CURRENT room (<= 85 studs)!
                         State.PB_LastActiveRoomPos = mobPos
                         State.PB_LastActiveRoomTime = now
 
-                        if (string.find(v.Name, "Archer", 1, true) or string.find(v.Name, "Mage", 1, true)) and distFromMe < currentRangedDist then
-                            currentRangedDist = distFromMe
-                            currentRangedMob = v
-                            currentRangedPart = part
+                        if isRanged then
+                            if hadEnt == true and distFromMe < currentRangedActiveDist then
+                                currentRangedActiveDist = distFromMe
+                                currentRangedActiveMob = v
+                                currentRangedActivePart = part
+                            end
+                            if distFromMe < currentRangedDist then
+                                currentRangedDist = distFromMe
+                                currentRangedMob = v
+                                currentRangedPart = part
+                            end
                         end
                         if hadEnt == true and distFromMe < currentActiveDist then
                             currentActiveDist = distFromMe
@@ -1633,6 +1732,11 @@ local function findBestPBTarget(isRaid)
                                 nextAdjacentMob = v
                                 nextAdjacentPart = part
                             end
+                            if isRanged and distFromMe < nextAdjacentRangedDist then
+                                nextAdjacentRangedDist = distFromMe
+                                nextAdjacentRangedMob = v
+                                nextAdjacentRangedPart = part
+                            end
                         end
                     end
                 end
@@ -1640,12 +1744,16 @@ local function findBestPBTarget(isRaid)
         end
     end
 
-    -- 1. Always finish 100% of enemies in the CURRENT room (<= 85 studs) first!
+    -- 1. Always finish 100% of enemies in the CURRENT room (<= 85 studs) first, strictly prioritizing RANGED enemies!
+    if currentRangedActiveMob then return currentRangedActiveMob, currentRangedActivePart end
     if currentRangedMob then return currentRangedMob, currentRangedPart end
     if currentActiveMob then return currentActiveMob, currentActivePart end
     if currentRoomMob then return currentRoomMob, currentRoomPart end
 
-    -- 2. Only when current room is 100% empty, step into the closest adjacent room (<= 190 studs)!
+    -- 2. Only when current room is 100% empty, step into the closest adjacent room (<= 190 studs), preferring ranged enemies inside that same next room!
+    if nextAdjacentRangedMob and nextAdjacentRangedDist <= (nextAdjacentDist + 30) then
+        return nextAdjacentRangedMob, nextAdjacentRangedPart
+    end
     return nextAdjacentMob, nextAdjacentPart
 end
 
@@ -1776,22 +1884,76 @@ local function applyPBTempBuffAndHeal(forceBuff)
     end
 end
 
--- Cached Mobile Sword Button (🗡️) & Jump Button (^) Finder (Scans at most once every 3.0s for ZERO lag!)
+-- Cached Mobile Sword Button (🗡️) & Jump Button (^) Finder (Scans at most once every 4.0s for ZERO lag!)
+-- Fixes the v4.3 nil ScreenGui crash by using State.HubScreenGui and caches both the button group and its signal connections!
+local function pbBuildGuiGroupAndConnections(primaryObj, vp)
+    if not primaryObj then return nil end
+    local group = {}
+    local seen = {}
+
+    local function addObj(o)
+        if o and o:IsA("GuiObject") and not seen[o] then
+            seen[o] = true
+            local entry = {
+                obj = o,
+                isButton = o:IsA("GuiButton"),
+                conns = {}
+            }
+            if getconnections then
+                for _, sigName in ipairs({ "MouseButton1Down", "Activated", "MouseButton1Click", "TouchTap", "InputBegan", "InputEnded", "MouseButton1Up" }) do
+                    pcall(function()
+                        local sig = o[sigName]
+                        if sig then
+                            local list = getconnections(sig)
+                            if list and #list > 0 then
+                                entry.conns[sigName] = list
+                            end
+                        end
+                    end)
+                end
+            end
+            table.insert(group, entry)
+        end
+    end
+
+    addObj(primaryObj)
+    pcall(function()
+        local p = primaryObj.Parent
+        if p and p:IsA("GuiObject") and p.AbsoluteSize.X <= vp.X * 0.28 and p.AbsoluteSize.Y <= vp.Y * 0.38 then
+            addObj(p)
+            for _, ch in ipairs(p:GetDescendants()) do
+                if ch:IsA("GuiObject") then
+                    addObj(ch)
+                end
+            end
+        else
+            for _, ch in ipairs(primaryObj:GetDescendants()) do
+                if ch:IsA("GuiObject") then
+                    addObj(ch)
+                end
+            end
+        end
+    end)
+
+    return group
+end
+
 local function pbGetMobileCombatButtons()
     local now = tick()
-    if State.PB_CachedSwordBtn and State.PB_CachedSwordBtn.Parent and (now - (State.PB_LastBtnScanTime or 0)) < 3.0 then
-        return State.PB_CachedSwordBtn, State.PB_CachedJumpBtn
+    if State.PB_CachedSwordBtn and State.PB_CachedSwordBtn.Parent and (now - (State.PB_LastBtnScanTime or 0)) < 4.0 then
+        return State.PB_CachedSwordBtn, State.PB_CachedJumpBtn, State.PB_CachedSwordGroup, State.PB_CachedJumpGroup
     end
-    if (now - (State.PB_LastBtnScanTime or 0)) < 3.0 then
-        return State.PB_CachedSwordBtn, State.PB_CachedJumpBtn
+    if (now - (State.PB_LastBtnScanTime or 0)) < 4.0 then
+        return State.PB_CachedSwordBtn, State.PB_CachedJumpBtn, State.PB_CachedSwordGroup, State.PB_CachedJumpGroup
     end
     State.PB_LastBtnScanTime = now
 
     local swordBtn = nil
     local jumpBtn = nil
+    local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
 
     pcall(function()
-        local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+        local ignoreGui = State.HubScreenGui
         local gameUI = PlayerGui:FindFirstChild("gameUI")
         local touchGui = PlayerGui:FindFirstChild("TouchGui")
 
@@ -1802,78 +1964,169 @@ local function pbGetMobileCombatButtons()
             end
         end
 
-        local bestSwordArea = 0
-        local bestJumpY = 0
-        local container = gameUI or PlayerGui
+        local bestSwordScore = -1
+        local bestJumpScore = -1
+        local containers = {}
+        if gameUI then table.insert(containers, gameUI) end
+        if touchGui then table.insert(containers, touchGui) end
+        if #containers == 0 then table.insert(containers, PlayerGui) end
 
-        for _, obj in ipairs(container:GetDescendants()) do
-            if obj ~= ScreenGui and not obj:IsDescendantOf(ScreenGui) and obj:IsA("GuiButton") and isGuiVisible(obj) then
-                local pos = obj.AbsolutePosition
-                local sz = obj.AbsoluteSize
-                local cx = pos.X + sz.X * 0.5
-                local cy = pos.Y + sz.Y * 0.5
-                local nameLow = string.lower(obj.Name)
-                local parentLow = obj.Parent and string.lower(obj.Parent.Name) or ""
+        for _, container in ipairs(containers) do
+            for _, obj in ipairs(container:GetDescendants()) do
+                if not (ignoreGui and (obj == ignoreGui or obj:IsDescendantOf(ignoreGui)))
+                    and (obj:IsA("GuiButton") or obj:IsA("ImageLabel") or obj:IsA("Frame"))
+                    and isGuiVisible(obj) then
 
-                -- Check explicit button names first
-                if string.find(nameLow, "attack", 1, true)
-                    or string.find(nameLow, "swing", 1, true)
-                    or string.find(nameLow, "sword", 1, true)
-                    or string.find(nameLow, "slash", 1, true)
-                    or string.find(nameLow, "m1", 1, true)
-                    or string.find(parentLow, "attack", 1, true)
-                    or string.find(parentLow, "swing", 1, true) then
-                    swordBtn = obj
-                elseif string.find(nameLow, "jump", 1, true) or string.find(parentLow, "jump", 1, true) then
-                    jumpBtn = obj
-                end
+                    local pos = obj.AbsolutePosition
+                    local sz = obj.AbsoluteSize
+                    if sz.X >= 28 and sz.Y >= 28 and sz.X <= vp.X * 0.25 and sz.Y <= vp.Y * 0.36 then
+                        local cx = pos.X + sz.X * 0.5
+                        local cy = pos.Y + sz.Y * 0.5
+                        local nameLow = string.lower(obj.Name or "")
+                        local parentLow = (obj.Parent and string.lower(obj.Parent.Name or "")) or ""
 
-                -- Geometric detection for Pixel Blade's bottom-right Mobile action cluster:
-                -- The Sword Attack button (🗡️) is the LARGEST circular button in the bottom-right quadrant!
-                if cx > vp.X * 0.64 and cy > vp.Y * 0.45 and sz.X >= 28 and sz.X <= vp.X * 0.25 and sz.Y <= vp.Y * 0.38 then
-                    local area = sz.X * sz.Y
-                    if not swordBtn and cy < vp.Y * 0.83 and area > bestSwordArea then
-                        bestSwordArea = area
-                        State.PB_GeomSwordBtn = obj
-                    end
-                    if not jumpBtn and cx > vp.X * 0.78 and cy > vp.Y * 0.78 and cy > bestJumpY then
-                        bestJumpY = cy
-                        State.PB_GeomJumpBtn = obj
+                        local isExcluded = string.find(nameLow, "block", 1, true)
+                            or string.find(nameLow, "shield", 1, true)
+                            or string.find(nameLow, "parry", 1, true)
+                            or string.find(nameLow, "dash", 1, true)
+                            or string.find(nameLow, "ability", 1, true)
+                            or string.find(nameLow, "skill", 1, true)
+                            or string.find(nameLow, "potion", 1, true)
+                            or string.find(nameLow, "heal", 1, true)
+                            or string.find(nameLow, "wish", 1, true)
+                            or string.find(parentLow, "block", 1, true)
+                            or string.find(parentLow, "shield", 1, true)
+                            or string.find(parentLow, "dash", 1, true)
+
+                        -- Check Jump button candidates
+                        if string.find(nameLow, "jump", 1, true) or string.find(parentLow, "jump", 1, true) then
+                            local jScore = 100000 + (obj:IsA("GuiButton") and 5000 or 0) + (sz.X * sz.Y)
+                            if jScore > bestJumpScore then
+                                bestJumpScore = jScore
+                                jumpBtn = obj
+                            end
+                        elseif cx >= vp.X * 0.78 and cx <= vp.X * 0.91 and cy >= vp.Y * 0.79 and cy <= vp.Y * 0.96 then
+                            local jScore = cy + (obj:IsA("GuiButton") and 2000 or 0)
+                            if jScore > bestJumpScore then
+                                bestJumpScore = jScore
+                                jumpBtn = obj
+                            end
+                        end
+
+                        -- Check Sword Attack button (🗡️) candidates:
+                        -- In Pixel Blade's bottom-right cluster, Sword is the LARGEST circle centered around (78.5% X, 70.5% Y).
+                        -- Strictly avoid Shield (cx > 83% X, cy < 64% Y) and Dash (cx > 84% X, cy in 64%..81% Y).
+                        local inShieldOrDashZone = (cx > vp.X * 0.835 and cy < vp.Y * 0.81)
+                        if not isExcluded and not inShieldOrDashZone then
+                            local isExplicitSword = string.find(nameLow, "attack", 1, true)
+                                or string.find(nameLow, "swing", 1, true)
+                                or string.find(nameLow, "sword", 1, true)
+                                or string.find(nameLow, "slash", 1, true)
+                                or string.find(nameLow, "m1", 1, true)
+                                or string.find(nameLow, "weapon", 1, true)
+                                or string.find(parentLow, "attack", 1, true)
+                                or string.find(parentLow, "swing", 1, true)
+                                or string.find(parentLow, "sword", 1, true)
+                                or string.find(parentLow, "slash", 1, true)
+
+                            local inSwordClusterZone = (cx >= vp.X * 0.68 and cx <= vp.X * 0.835 and cy >= vp.Y * 0.55 and cy <= vp.Y * 0.82)
+                            if isExplicitSword or inSwordClusterZone then
+                                local area = sz.X * sz.Y
+                                local score = area
+                                if isExplicitSword then score = score + 200000 end
+                                if obj:IsA("GuiButton") then score = score + 25000 end
+                                if obj.Active then score = score + 5000 end
+                                -- Bonus for proximity to exact Sword Button center (78.5% X, 70.5% Y)
+                                local distToSwordCenter = math.sqrt((cx - vp.X * 0.785)^2 + (cy - vp.Y * 0.705)^2)
+                                score = score - (distToSwordCenter * 40)
+
+                                if score > bestSwordScore then
+                                    bestSwordScore = score
+                                    swordBtn = obj
+                                end
+                            end
+                        end
                     end
                 end
             end
-        end
-
-        if not swordBtn then
-            swordBtn = State.PB_GeomSwordBtn
-        end
-        if not jumpBtn then
-            jumpBtn = State.PB_GeomJumpBtn
         end
     end)
 
     State.PB_CachedSwordBtn = swordBtn
     State.PB_CachedJumpBtn = jumpBtn
-    return swordBtn, jumpBtn
+    State.PB_CachedSwordGroup = pbBuildGuiGroupAndConnections(swordBtn, vp)
+    State.PB_CachedJumpGroup = pbBuildGuiGroupAndConnections(jumpBtn, vp)
+    return swordBtn, jumpBtn, State.PB_CachedSwordGroup, State.PB_CachedJumpGroup
 end
 
-local function pbTriggerGuiButtonInstant(btn)
+-- Fires both direct GuiButton signals AND cached getconnections (including valid mock InputObjects for InputBegan & TouchTap!)
+local function pbTriggerGuiGroup(btn, group)
     if not btn then return end
     pcall(function()
-        if firesignal then
-            pcall(firesignal, btn.MouseButton1Down)
-            pcall(firesignal, btn.Activated)
-            pcall(firesignal, btn.MouseButton1Click)
-            pcall(firesignal, btn.MouseButton1Up)
-        end
-        if getconnections then
-            for _, sig in ipairs({ btn.MouseButton1Down, btn.Activated, btn.MouseButton1Click }) do
-                if sig then
-                    for _, conn in ipairs(getconnections(sig)) do
-                        if conn.Fire then
-                            pcall(function() conn:Fire() end)
-                        elseif conn.Function then
-                            pcall(conn.Function)
+        local pos = btn.AbsolutePosition
+        local sz = btn.AbsoluteSize
+        local sx = math.floor(pos.X + sz.X * 0.5)
+        local sy = math.floor(pos.Y + sz.Y * 0.5)
+        local vec3Pos = Vector3.new(sx, sy, 0)
+        local touchPositions = { Vector2.new(sx, sy) }
+
+        local mockTouchBegin = {
+            UserInputType = Enum.UserInputType.Touch,
+            UserInputState = Enum.UserInputState.Begin,
+            KeyCode = Enum.KeyCode.Unknown,
+            Position = vec3Pos,
+            Delta = Vector3.zero
+        }
+        local mockMouseBegin = {
+            UserInputType = Enum.UserInputType.MouseButton1,
+            UserInputState = Enum.UserInputState.Begin,
+            KeyCode = Enum.KeyCode.Unknown,
+            Position = vec3Pos,
+            Delta = Vector3.zero
+        }
+
+        local entries = group or { { obj = btn, isButton = btn:IsA("GuiButton"), conns = {} } }
+        for _, entry in ipairs(entries) do
+            local o = entry.obj
+            if o and o.Parent then
+                if entry.isButton and firesignal then
+                    pcall(firesignal, o.MouseButton1Down, sx, sy)
+                    pcall(firesignal, o.Activated)
+                    pcall(firesignal, o.MouseButton1Click)
+                    pcall(firesignal, o.TouchTap, touchPositions)
+                    pcall(firesignal, o.MouseButton1Up, sx, sy)
+                end
+
+                local conns = entry.conns
+                if conns then
+                    if conns.MouseButton1Down then
+                        for _, c in ipairs(conns.MouseButton1Down) do
+                            if c.Function then pcall(c.Function, sx, sy) elseif c.Fire then pcall(function() c:Fire(sx, sy) end) end
+                        end
+                    end
+                    if conns.Activated then
+                        for _, c in ipairs(conns.Activated) do
+                            if c.Function then pcall(c.Function) elseif c.Fire then pcall(function() c:Fire() end) end
+                        end
+                    end
+                    if conns.MouseButton1Click then
+                        for _, c in ipairs(conns.MouseButton1Click) do
+                            if c.Function then pcall(c.Function) elseif c.Fire then pcall(function() c:Fire() end) end
+                        end
+                    end
+                    if conns.TouchTap then
+                        for _, c in ipairs(conns.TouchTap) do
+                            if c.Function then pcall(c.Function, touchPositions) elseif c.Fire then pcall(function() c:Fire(touchPositions) end) end
+                        end
+                    end
+                    if conns.InputBegan then
+                        for _, c in ipairs(conns.InputBegan) do
+                            if c.Function then
+                                pcall(c.Function, mockTouchBegin, false)
+                                pcall(c.Function, mockMouseBegin, false)
+                            elseif c.Fire then
+                                pcall(function() c:Fire(mockTouchBegin, false) end)
+                            end
                         end
                     end
                 end
@@ -1883,10 +2136,12 @@ local function pbTriggerGuiButtonInstant(btn)
 end
 
 -- Overhead Jump + Continuous Non-Stop Click Attack Engine (Works on Android Mobile & PC with ZERO lag!):
--- Triggers real Roblox Jump + taps the on-screen Mobile Sword Button (🗡️) & Jump Button (^) + PC mouse1click!
+-- 1. Triggers real physical Roblox Jump (Humanoid.Jump = true + Jumping state + airborne hop) for the "Overhead" Sword Upgrade!
+-- 2. Taps the Mobile Sword Button (🗡️) & Jump Button (^) via cached connections + firesignal
+-- 3. Sends VirtualInputManager:SendMouseButtonEvent with a 0.045s hold duration (exact TexRBLX/final.lua M1 method!)
 local function pbPerformRealM1Attack()
     local now = tick()
-    if (now - (State.PB_LastM1Time or 0)) < 0.16 then return end
+    if (now - (State.PB_LastM1Time or 0)) < 0.14 then return end
     State.PB_LastM1Time = now
 
     pcall(function()
@@ -1901,37 +2156,92 @@ local function pbPerformRealM1Attack()
             end
         end
 
-        -- 2. Find & Press Mobile Sword Button (🗡️) + Mobile Jump Button (^) in PlayerGui.gameUI
-        local swordBtn, jumpBtn = pbGetMobileCombatButtons()
-        if jumpBtn then
-            pbTriggerGuiButtonInstant(jumpBtn)
-        end
-        if swordBtn then
-            pbTriggerGuiButtonInstant(swordBtn)
-            if VirtualInputManager then
-                local pos = swordBtn.AbsolutePosition
-                local sz = swordBtn.AbsoluteSize
-                local inset = GuiService:GetGuiInset()
-                local sx = math.floor(pos.X + sz.X * 0.5)
-                local sy = math.floor(pos.Y + sz.Y * 0.5 + inset.Y)
-                VirtualInputManager:SendMouseButtonEvent(sx, sy, 0, true, game, 0)
-                VirtualInputManager:SendMouseButtonEvent(sx, sy, 0, false, game, 0)
-            end
-        elseif VirtualInputManager then
-            -- Fallback to exact bottom-right Sword Button coordinate (78.5% X, 70.5% Y) + PC (0, 0)
-            local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
-            if UserInputService.TouchEnabled then
-                local sx = math.floor(vp.X * 0.785)
-                local sy = math.floor(vp.Y * 0.705)
-                VirtualInputManager:SendMouseButtonEvent(sx, sy, 0, true, game, 0)
-                VirtualInputManager:SendMouseButtonEvent(sx, sy, 0, false, game, 0)
-            else
-                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+        -- 2. Clear any local weapon swing cooldown in getsenv(Character.localChar) without corrupting tables
+        if getsenv and Character then
+            local lc = Character:FindFirstChild("localChar")
+            if lc and lc:IsA("LocalScript") then
+                if State.PB_CachedLocalCharScript ~= lc then
+                    State.PB_CachedLocalCharScript = lc
+                    local ok, env = pcall(getsenv, lc)
+                    State.PB_CachedLocalCharEnv = ok and env or nil
+                end
+                local env = State.PB_CachedLocalCharEnv
+                if type(env) == "table" and type(env.weapon) == "table" then
+                    for k, v in pairs(env.weapon) do
+                        local kl = type(k) == "string" and string.lower(k) or ""
+                        if type(v) == "boolean" and (kl == "cd" or kl == "cooldown" or kl == "attackcd" or kl == "swingcd" or kl == "debounce") then
+                            env.weapon[k] = false
+                        elseif type(v) == "number" and (kl == "cd" or kl == "cooldown" or kl == "attackcd" or kl == "swingcd") then
+                            env.weapon[k] = 0
+                        end
+                    end
+                end
             end
         end
 
-        -- 3. Activate Tool & Delta mouse1click
+        -- 3. Find & Press Mobile Sword Button (🗡️) + Mobile Jump Button (^) in PlayerGui.gameUI
+        local swordBtn, jumpBtn, swordGroup, jumpGroup = pbGetMobileCombatButtons()
+        if jumpBtn then
+            pbTriggerGuiGroup(jumpBtn, jumpGroup)
+        end
+        if swordBtn then
+            pbTriggerGuiGroup(swordBtn, swordGroup)
+        end
+
+        -- 4. VirtualInputManager M1 Click with 0.045s Hold Duration (TexRBLX/final.lua verified M1 method!)
+        if VirtualInputManager and not State.PB_M1ClickInFlight then
+            State.PB_M1ClickInFlight = true
+            task.spawn(function()
+                pcall(function()
+                    local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+                    local inset = GuiService:GetGuiInset()
+                    local sx, syRaw, syInset
+
+                    if swordBtn and swordBtn.Parent then
+                        local pos = swordBtn.AbsolutePosition
+                        local sz = swordBtn.AbsoluteSize
+                        sx = math.floor(pos.X + sz.X * 0.5)
+                        syRaw = math.floor(pos.Y + sz.Y * 0.5)
+                        syInset = math.floor(syRaw + inset.Y)
+                    else
+                        sx = math.floor(vp.X * 0.785)
+                        syRaw = math.floor(vp.Y * 0.705)
+                        syInset = math.floor(syRaw + inset.Y)
+                    end
+
+                    -- Press M1 on Sword Button coordinates + viewport center-left (500, 500)
+                    VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, true, game, 1)
+                    if syRaw ~= syInset then
+                        VirtualInputManager:SendMouseButtonEvent(sx, syRaw, 0, true, game, 1)
+                    end
+                    VirtualInputManager:SendMouseButtonEvent(500, 500, 0, true, game, 1)
+                    if VirtualInputManager.SendTouchEvent then
+                        pcall(function()
+                            VirtualInputManager:SendTouchEvent(1, 0, sx, syInset)
+                        end)
+                    end
+                    if mouse1press then pcall(mouse1press) end
+
+                    task.wait(0.045)
+
+                    -- Release M1
+                    VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, false, game, 1)
+                    if syRaw ~= syInset then
+                        VirtualInputManager:SendMouseButtonEvent(sx, syRaw, 0, false, game, 1)
+                    end
+                    VirtualInputManager:SendMouseButtonEvent(500, 500, 0, false, game, 1)
+                    if VirtualInputManager.SendTouchEvent then
+                        pcall(function()
+                            VirtualInputManager:SendTouchEvent(1, 2, sx, syInset)
+                        end)
+                    end
+                    if mouse1release then pcall(mouse1release) end
+                end)
+                State.PB_M1ClickInFlight = false
+            end)
+        end
+
+        -- 5. Activate Tool & Delta mouse1click
         if Character then
             local tool = Character:FindFirstChildOfClass("Tool")
             if tool then
@@ -2265,7 +2575,7 @@ local function pbUpgradeAllItemsNow()
     end
 end
 
---// Pixel Blade Infinite Dash & No Ability Cooldown (Cached getsenv so it NEVER lags!)
+--// Pixel Blade Infinite Dash & No Ability Cooldown (Cached getsenv matching TexRBLX/final.lua — NEVER corrupts dashCD table!)
 local function applyPBInfDashAndNoCD()
     if not Config.PB_InfDashAndNoCD or not Character then return end
     pcall(function()
@@ -2279,18 +2589,36 @@ local function applyPBInfDashAndNoCD()
                 end
                 local env = State.PB_CachedLocalCharEnv
                 if type(env) == "table" then
+                    if type(env.armor) == "table" then
+                        env.armor.dashCD = false
+                    end
+                    if type(env.armorStats) == "table" then
+                        if type(env.armorStats.energy) == "number" then
+                            env.armorStats.energy = env.armorStats.maxEnergy or 100
+                        end
+                        if type(env.armorStats.dashes) == "number" then
+                            env.armorStats.dashes = env.armorStats.maxDashes or 3
+                        end
+                    end
                     if type(env.maxEnergy) == "number" then
                         env.energy = env.maxEnergy
                     end
                     if type(env.maxDashes) == "number" then
                         env.dashes = env.maxDashes
                     end
-                    if env.dashCD ~= nil then
-                        env.dashCD = 0
+                    -- IMPORTANT: In Character.localChar, env.dashCD is a TABLE! Never overwrite it with 0!
+                    if type(env.dashCD) == "table" then
+                        for i = #env.dashCD, 1, -1 do
+                            table.remove(env.dashCD, i)
+                        end
+                    elseif type(env.dashCD) == "boolean" then
+                        env.dashCD = false
                     end
                     if type(env.abilityCooldowns) == "table" then
-                        for k in pairs(env.abilityCooldowns) do
-                            env.abilityCooldowns[k] = nil
+                        for k, v in pairs(env.abilityCooldowns) do
+                            if type(v) == "number" then
+                                env.abilityCooldowns[k] = 0
+                            end
                         end
                     end
                 end
@@ -2935,8 +3263,10 @@ task.spawn(function()
                             return
                         end
 
+                        local isRangedTarget = pbIsRangedEnemy(mob)
                         State.PB_DungeonStatusText = string.format(
-                            "⚔️ يهاجم: %s | المسافة: %d | HP: %d | سلاحك: %d",
+                            "%s يهاجم: %s | المسافة: %d | HP: %d | سلاحك: %d",
+                            isRangedTarget and "🏹 [بعيد المدى]" or "⚔️",
                             tostring(mob.Name), dist, hp, currentPBWeaponDamage()
                         )
 
@@ -3640,8 +3970,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v4.3 | Pixel Blade [Zero-Lag Jump-Click]"
-    or "⚔️ Delta Hub v4.3 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v4.4 | Pixel Blade [Overhead Jump-Click + Ranged Priority]"
+    or "⚔️ Delta Hub v4.4 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -4621,4 +4951,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v4.3] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v4.4] Loaded! Active Game Detected: " .. tostring(CurrentGame))
