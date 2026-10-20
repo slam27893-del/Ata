@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v4.7 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v4.8 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Pure Auto-Clicker M1 + Healer/Drainer #1 Priority v4.7)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Crash-Free Auto-Clicker M1 + Healer/Drainer #1 Priority v4.8)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -2070,117 +2070,14 @@ local function applyPBTempBuffAndHeal(forceBuff)
     end
 end
 
--- Cached Character.localChar Environment & Zero-Arg Mouse Trigger Collector (Runs ONCE per character spawn = ZERO lag!)
--- IMPORTANT: NEVER passes fake Lua tables to UserInputService.InputBegan (which crashes localChar on input.Changed:Connect and locks the pink charge ring!)
-local function pbGetLocalCharSwingTriggers()
-    if not Character then return nil end
-    local lc = Character:FindFirstChild("localChar")
-    if not lc or not lc:IsA("LocalScript") then return nil end
-
-    if State.PB_CachedSwingTriggerScript == lc and State.PB_CachedSwingTriggers then
-        return State.PB_CachedSwingTriggers
-    end
-
-    local triggers = {
-        env = nil,
-        mouseDown = {},
-        mouseUp = {}
-    }
-
-    pcall(function()
-        if getsenv then
-            local ok, env = pcall(getsenv, lc)
-            if ok and type(env) == "table" then
-                triggers.env = env
-                State.PB_CachedLocalCharScript = lc
-                State.PB_CachedLocalCharEnv = env
-            end
-        end
-
-        if getconnections then
-            pcall(function()
-                local mouse = LocalPlayer:GetMouse()
-                if mouse then
-                    for _, c in ipairs(getconnections(mouse.Button1Down)) do
-                        if c.Function then
-                            table.insert(triggers.mouseDown, c.Function)
-                        end
-                    end
-                    for _, c in ipairs(getconnections(mouse.Button1Up)) do
-                        if c.Function then
-                            table.insert(triggers.mouseUp, c.Function)
-                        end
-                    end
-                end
-            end)
-        end
-    end)
-
-    State.PB_CachedSwingTriggerScript = lc
-    State.PB_CachedSwingTriggers = triggers
-    return triggers
-end
-
--- Cached Mobile Sword Button (🗡️) & Jump Button (^) Finder (Scans at most once every 4.0s for ZERO lag!)
--- IMPORTANT: NEVER climbs to primaryObj.Parent (which holds Block 🛡️ / Dash 💨 / Ability ⚡)! Only binds primaryObj and its own children!
-local function pbBuildGuiGroupAndConnections(primaryObj, vp)
-    if not primaryObj then return nil end
-    local group = {}
-    local seen = {}
-
-    local function addObj(o)
-        if o and o:IsA("GuiObject") and not seen[o] then
-            local nLow = string.lower(o.Name or "")
-            if string.find(nLow, "block", 1, true)
-                or string.find(nLow, "shield", 1, true)
-                or string.find(nLow, "dash", 1, true)
-                or string.find(nLow, "ability", 1, true)
-                or string.find(nLow, "skill", 1, true)
-                or string.find(nLow, "charge", 1, true) then
-                return
-            end
-            seen[o] = true
-            local entry = {
-                obj = o,
-                isButton = o:IsA("GuiButton"),
-                conns = {}
-            }
-            if getconnections then
-                for _, sigName in ipairs({ "MouseButton1Click", "Activated", "MouseButton1Down", "MouseButton1Up" }) do
-                    pcall(function()
-                        local sig = o[sigName]
-                        if sig then
-                            local list = getconnections(sig)
-                            if list and #list > 0 then
-                                entry.conns[sigName] = list
-                            end
-                        end
-                    end)
-                end
-            end
-            table.insert(group, entry)
-        end
-    end
-
-    addObj(primaryObj)
-    pcall(function()
-        for _, ch in ipairs(primaryObj:GetDescendants()) do
-            if ch:IsA("GuiObject") then
-                addObj(ch)
-            end
-        end
-    end)
-
-    return group
-end
-
-local function pbGetMobileCombatButtons()
+-- 100% Crash-Free Mobile Sword Button (🗡️) & Jump Button (^) Finder (Scans at most once every 5.0s, ZERO C++ hooks!)
+local function pbFindSwordAndJumpButtons()
     local now = tick()
-    if State.PB_CachedSwordBtn and State.PB_CachedSwordBtn.Parent and (now - (State.PB_LastBtnScanTime or 0)) < 4.0 then
-        return State.PB_CachedSwordBtn, State.PB_CachedJumpBtn, State.PB_CachedSwordGroup, State.PB_CachedJumpGroup
+    if State.PB_CachedSwordBtn and State.PB_CachedSwordBtn.Parent and (now - (State.PB_LastBtnScanTime or 0)) < 5.0 then
+        return State.PB_CachedSwordBtn, State.PB_CachedJumpBtn
     end
-    if (now - (State.PB_LastBtnScanTime or 0)) < 4.0 then
-        return State.PB_CachedSwordBtn, State.PB_CachedJumpBtn, State.PB_CachedSwordGroup, State.PB_CachedJumpGroup
+    if (now - (State.PB_LastBtnScanTime or 0)) < 5.0 then
+        return State.PB_CachedSwordBtn, State.PB_CachedJumpBtn
     end
     State.PB_LastBtnScanTime = now
 
@@ -2189,7 +2086,6 @@ local function pbGetMobileCombatButtons()
     local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
 
     pcall(function()
-        local ignoreGui = State.HubScreenGui
         local gameUI = PlayerGui:FindFirstChild("gameUI")
         local touchGui = PlayerGui:FindFirstChild("TouchGui")
 
@@ -2200,252 +2096,101 @@ local function pbGetMobileCombatButtons()
             end
         end
 
-        local bestSwordArea = 0
-        local bestExplicitSword = nil
-        local bestJumpY = 0
-        local containers = {}
-        if gameUI then table.insert(containers, gameUI) end
-        if touchGui then table.insert(containers, touchGui) end
-        if #containers == 0 then table.insert(containers, PlayerGui) end
-
-        for _, container in ipairs(containers) do
-            for _, obj in ipairs(container:GetDescendants()) do
-                if not (ignoreGui and (obj == ignoreGui or obj:IsDescendantOf(ignoreGui)))
-                    and (obj:IsA("GuiButton") or obj:IsA("ImageLabel") or obj:IsA("Frame"))
-                    and isGuiVisible(obj) then
-
+        if gameUI then
+            local bestSwordArea = 0
+            for _, obj in ipairs(gameUI:GetDescendants()) do
+                if obj:IsA("GuiButton") and isGuiVisible(obj) then
                     local pos = obj.AbsolutePosition
                     local sz = obj.AbsoluteSize
-                    if sz.X >= 32 and sz.Y >= 32 and sz.X <= vp.X * 0.24 and sz.Y <= vp.Y * 0.36 then
+                    if sz.X >= 40 and sz.Y >= 40 and sz.X <= vp.X * 0.22 and sz.Y <= vp.Y * 0.35 then
                         local cx = pos.X + sz.X * 0.5
                         local cy = pos.Y + sz.Y * 0.5
-                        local nameLow = string.lower(obj.Name or "")
-                        local parentLow = (obj.Parent and string.lower(obj.Parent.Name or "")) or ""
-
-                        local isExcluded = string.find(nameLow, "block", 1, true)
-                            or string.find(nameLow, "shield", 1, true)
-                            or string.find(nameLow, "parry", 1, true)
-                            or string.find(nameLow, "dash", 1, true)
-                            or string.find(nameLow, "ability", 1, true)
-                            or string.find(nameLow, "skill", 1, true)
-                            or string.find(nameLow, "potion", 1, true)
-                            or string.find(nameLow, "heal", 1, true)
-                            or string.find(nameLow, "wish", 1, true)
-                            or string.find(parentLow, "block", 1, true)
-                            or string.find(parentLow, "shield", 1, true)
-                            or string.find(parentLow, "dash", 1, true)
-
-                        if string.find(nameLow, "jump", 1, true) or string.find(parentLow, "jump", 1, true) then
-                            jumpBtn = obj
-                        elseif not jumpBtn and cx > vp.X * 0.76 and cy > vp.Y * 0.78 and cy > bestJumpY then
-                            bestJumpY = cy
-                            jumpBtn = obj
-                        end
-
-                        if not isExcluded then
-                            local isExplicitSword = string.find(nameLow, "attack", 1, true)
-                                or string.find(nameLow, "swing", 1, true)
-                                or string.find(nameLow, "sword", 1, true)
-                                or string.find(nameLow, "slash", 1, true)
-                                or string.find(nameLow, "m1", 1, true)
-                                or string.find(parentLow, "attack", 1, true)
-                                or string.find(parentLow, "swing", 1, true)
-                                or string.find(parentLow, "sword", 1, true)
-
-                            if isExplicitSword then
-                                bestExplicitSword = obj
-                            elseif cx > vp.X * 0.62 and cy > vp.Y * 0.45 and cy < vp.Y * 0.84 then
-                                -- In Pixel Blade's bottom-right action cluster, the Sword Button (🗡️) is ALWAYS the largest circular button!
-                                local aspectDiff = math.abs(sz.X - sz.Y)
-                                if aspectDiff <= math.max(sz.X, sz.Y) * 0.35 then
-                                    local area = sz.X * sz.Y
-                                    if obj:IsA("GuiButton") then
-                                        area = area * 1.15
-                                    end
-                                    if area > bestSwordArea then
-                                        bestSwordArea = area
-                                        swordBtn = obj
-                                    end
+                        -- In Pixel Blade's mobile HUD, the Sword Button (🗡️) is centered at (~0.7855 * vp.X, ~0.6962 * vp.Y)
+                        -- and is the largest circular GuiButton in that zone!
+                        if cx >= vp.X * 0.70 and cx <= vp.X * 0.84 and cy >= vp.Y * 0.58 and cy <= vp.Y * 0.79 then
+                            local aspectDiff = math.abs(sz.X - sz.Y)
+                            if aspectDiff <= math.max(sz.X, sz.Y) * 0.30 then
+                                local area = sz.X * sz.Y
+                                if area > bestSwordArea then
+                                    bestSwordArea = area
+                                    swordBtn = obj
                                 end
                             end
+                        elseif not jumpBtn and cx >= vp.X * 0.78 and cx <= vp.X * 0.88 and cy >= vp.Y * 0.80 and cy <= vp.Y * 0.94 then
+                            jumpBtn = obj
                         end
                     end
                 end
             end
-        end
-
-        if bestExplicitSword then
-            swordBtn = bestExplicitSword
         end
     end)
 
     State.PB_CachedSwordBtn = swordBtn
     State.PB_CachedJumpBtn = jumpBtn
-    State.PB_CachedSwordGroup = pbBuildGuiGroupAndConnections(swordBtn, vp)
-    State.PB_CachedJumpGroup = pbBuildGuiGroupAndConnections(jumpBtn, vp)
-    return swordBtn, jumpBtn, State.PB_CachedSwordGroup, State.PB_CachedJumpGroup
+    return swordBtn, jumpBtn
 end
 
--- Instant Zero-Hold Auto-Clicker Tap on a Mobile GuiButton (NEVER passes fake tables to InputBegan so the button NEVER sticks in charge mode!)
-local function pbTriggerGuiGroup(btn, group)
-    if not btn then return end
-    pcall(function()
-        local pos = btn.AbsolutePosition
-        local sz = btn.AbsoluteSize
-        local sx = math.floor(pos.X + sz.X * 0.5)
-        local sy = math.floor(pos.Y + sz.Y * 0.5)
-
-        local entries = group or { { obj = btn, isButton = btn:IsA("GuiButton"), conns = {} } }
-        for _, entry in ipairs(entries) do
-            local o = entry.obj
-            if o and o.Parent and entry.isButton then
-                if firesignal then
-                    pcall(firesignal, o.MouseButton1Down, sx, sy)
-                    pcall(firesignal, o.MouseButton1Up, sx, sy)
-                    pcall(firesignal, o.MouseButton1Click)
-                    pcall(firesignal, o.Activated)
-                end
-
-                local conns = entry.conns
-                if conns then
-                    if conns.MouseButton1Down then
-                        for _, c in ipairs(conns.MouseButton1Down) do
-                            if c.Function then pcall(c.Function, sx, sy) elseif c.Fire then pcall(function() c:Fire(sx, sy) end) end
-                        end
-                    end
-                    if conns.MouseButton1Up then
-                        for _, c in ipairs(conns.MouseButton1Up) do
-                            if c.Function then pcall(c.Function, sx, sy) elseif c.Fire then pcall(function() c:Fire(sx, sy) end) end
-                        end
-                    end
-                    if conns.MouseButton1Click then
-                        for _, c in ipairs(conns.MouseButton1Click) do
-                            if c.Function then pcall(c.Function) elseif c.Fire then pcall(function() c:Fire() end) end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-end
-
--- Pure High-Speed Auto-Clicker Engine (أوتو كليكر نقي وسريع للضرب المستمر + Overhead Jump):
--- 1. Instant 0-delay click via VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true/false, game, 0) (exact thha3203 M1 Auto-Clicker!)
--- 2. Native Roblox Controller Click via VirtualUser:CaptureController() + VirtualUser:ClickButton1(Vector2.new(0, 0))
--- 3. Instant Mobile Sword Button (🗡️) tap at (sx, syInset) + MouseButton1Click (ZERO fake InputBegan tables so it NEVER sticks in pink charge ring!)
--- 4. Clears weapon cooldowns & stuck charge/block flags in getsenv(Character.localChar) + fires remotes.swing:FireServer()
+-- 100% Crash-Free Pure Auto-Clicker M1 Engine (Works on Delta Android & PC with ZERO C++ crash hooks!):
+-- NEVER calls VirtualUser, firesignal, getconnections, or getsenv table iteration (which crash Delta Android!).
+-- Uses ONLY Roblox's native VirtualInputManager:SendMouseButtonEvent + Humanoid.Jump!
 local function pbPerformRealM1Attack()
+    if not Config.PB_AutoClicker then return end
     local now = tick()
-    if (now - (State.PB_LastM1Time or 0)) < 0.08 then return end
+    if (now - (State.PB_LastM1Time or 0)) < 0.14 or State.PB_M1ClickInFlight then return end
     State.PB_LastM1Time = now
 
     pcall(function()
-        -- 1. Trigger Real Physical Jump + Jumping State for "Overhead" Sword Upgrade!
+        -- 1. Trigger Real Physical Jump for "Overhead" Sword Upgrade!
         if Humanoid then
             Humanoid.Jump = true
-            local st = Humanoid:GetState()
-            if st ~= Enum.HumanoidStateType.Jumping and st ~= Enum.HumanoidStateType.Freefall then
-                pcall(function()
-                    Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-                end)
-            end
         end
 
-        -- 2. Reset weapon cooldowns & any stuck charge/block/debounce flags in getsenv(Character.localChar)
-        local triggers = pbGetLocalCharSwingTriggers()
-        if triggers then
-            local env = triggers.env
-            if type(env) == "table" then
-                if type(env.abilityCooldowns) == "table" then
-                    for k, v in pairs(env.abilityCooldowns) do
-                        if type(v) == "number" then
-                            env.abilityCooldowns[k] = 0
-                        elseif v == true then
-                            env.abilityCooldowns[k] = false
-                        end
-                    end
-                end
-                for k, v in pairs(env) do
-                    local kl = type(k) == "string" and string.lower(k) or ""
-                    if v == true and (kl == "blocking" or kl == "isblocking" or kl == "charging" or kl == "ischarging" or kl == "holding" or kl == "swingcd" or kl == "attackcd" or kl == "debounce") then
-                        env[k] = false
-                    end
-                end
-                if type(env.weapon) == "table" then
-                    if type(env.weapon.abilityCooldowns) == "table" then
-                        for k, v in pairs(env.weapon.abilityCooldowns) do
-                            if v == true then
-                                env.weapon.abilityCooldowns[k] = false
-                            elseif type(v) == "number" then
-                                env.weapon.abilityCooldowns[k] = 0
-                            end
-                        end
-                    end
-                    for k, v in pairs(env.weapon) do
-                        local kl = type(k) == "string" and string.lower(k) or ""
-                        if v == true and (kl == "cd" or kl == "cooldown" or kl == "attackcd" or kl == "swingcd" or kl == "debounce" or kl == "charging" or kl == "holding" or kl == "blocking") then
-                            env.weapon[k] = false
-                        elseif type(v) == "number" and (kl == "cd" or kl == "cooldown" or kl == "attackcd" or kl == "swingcd") then
-                            env.weapon[k] = 0
-                        end
-                    end
-                end
-            end
-
-            for _, fn in ipairs(triggers.mouseDown) do
-                pcall(fn)
-            end
-            for _, fn in ipairs(triggers.mouseUp) do
-                pcall(fn)
-            end
-        end
-
-        -- 3. Pure Auto-Clicker Click #1: VirtualInputManager Instant 0-Delay Tap at (0, 0) (never hits GUI, never triggers heavy charge!)
+        -- 2. Pure Screen Auto-Clicker via VirtualInputManager ONLY (Press -> 0.02s -> Release, strictly 1-at-a-time!)
         if VirtualInputManager then
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-        end
+            State.PB_M1ClickInFlight = true
+            task.spawn(function()
+                pcall(function()
+                    local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+                    local inset = GuiService:GetGuiInset()
+                    local swordBtn = pbFindSwordAndJumpButtons()
 
-        -- 4. Pure Auto-Clicker Click #2: VirtualUser Hardware Controller Click
-        if VirtualUser then
-            pcall(function()
-                VirtualUser:CaptureController()
-                VirtualUser:ClickButton1(Vector2.new(0, 0))
+                    local sx, syScreen, syInset
+                    if swordBtn and swordBtn.Parent then
+                        local pos = swordBtn.AbsolutePosition
+                        local sz = swordBtn.AbsoluteSize
+                        sx = math.floor(pos.X + sz.X * 0.5)
+                        syScreen = math.floor(pos.Y + sz.Y * 0.5)
+                        syInset = math.floor(syScreen + inset.Y)
+                    else
+                        -- Exact measured Sword Button (🗡️) center from Android screenshot (0.7855, 0.6962)
+                        sx = math.floor(vp.X * 0.7855)
+                        syScreen = math.floor(vp.Y * 0.6962)
+                        syInset = math.floor(syScreen + inset.Y)
+                    end
+
+                    -- Ensure Hub MainFrame is not covering the Sword Button
+                    local coveredByHub = false
+                    local mf = State.HubMainFrame
+                    if mf and mf.Parent and mf.Visible then
+                        local mPos = mf.AbsolutePosition
+                        local mSz = mf.AbsoluteSize
+                        if sx >= mPos.X and sx <= (mPos.X + mSz.X) and syScreen >= mPos.Y and syScreen <= (mPos.Y + mSz.Y) then
+                            coveredByHub = true
+                        end
+                    end
+
+                    if not coveredByHub then
+                        VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, true, game, 1)
+                        task.wait(0.02)
+                        VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, false, game, 1)
+                    else
+                        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                        task.wait(0.02)
+                        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                    end
+                end)
+                State.PB_M1ClickInFlight = false
             end)
-        end
-
-        -- 5. Pure Auto-Clicker Click #3: Mobile Sword Button (🗡️) Instant Tap
-        local swordBtn, jumpBtn, swordGroup, jumpGroup = pbGetMobileCombatButtons()
-        if jumpBtn then
-            pbTriggerGuiGroup(jumpBtn, jumpGroup)
-        end
-        if swordBtn and swordBtn.Parent then
-            pbTriggerGuiGroup(swordBtn, swordGroup)
-            if VirtualInputManager then
-                local inset = GuiService:GetGuiInset()
-                local pos = swordBtn.AbsolutePosition
-                local sz = swordBtn.AbsoluteSize
-                local sx = math.floor(pos.X + sz.X * 0.5)
-                local syInset = math.floor(pos.Y + sz.Y * 0.5 + inset.Y)
-                VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, true, game, 0)
-                VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, false, game, 0)
-            end
-        end
-
-        -- 6. Pure Auto-Clicker Click #4: Delta mouse1click + Tool:Activate() + remotes.swing
-        if mouse1click then
-            pcall(mouse1click)
-        end
-        if Character then
-            local tool = Character:FindFirstChildOfClass("Tool")
-            if tool then
-                pcall(function() tool:Activate() end)
-            end
-        end
-        local pbRemotes = getPBRemotes()
-        local swing = pbRemotes and pbRemotes:FindFirstChild("swing")
-        if swing then
-            swing:FireServer()
         end
     end)
 end
@@ -3597,28 +3342,13 @@ task.spawn(function()
                 State.PB_ActiveFollowMob = nil
                 State.PB_ActiveFollowPart = nil
                 State.PB_DungeonStatusText = "متوقف (جاهز للتشغيل)"
-            end
-        end)
-    end
-end)
-
--- 2G. Dedicated Pixel Blade Pure Fast Auto-Clicker M1 Loop (أوتو كليكر سريع للضرب المستمر بدون أي لاق!)
-task.spawn(function()
-    while State.Running do
-        task.wait(0.09)
-        if Config.PB_AutoClicker or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid then
-            pcall(function()
+            elseif Config.PB_AutoClicker and HumanoidRootPart then
                 local cutscene = workspace:FindFirstChild("inCutscene")
-                if cutscene and cutscene.Value == true then return end
-
-                local activeMob = State.PB_ActiveFollowMob
-                if activeMob and activeMob.Parent and isPBMobAlive(activeMob) then
-                    pbPerformRealM1Attack()
-                elseif Config.PB_AutoClicker and not (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) then
+                if not (cutscene and cutscene.Value == true) then
                     pbPerformRealM1Attack()
                 end
-            end)
-        end
+            end
+        end)
     end
 end)
 
@@ -4247,6 +3977,7 @@ MainFrame.Position = UDim2.new(0.5, -280, 0.5, -190)
 MainFrame.BackgroundColor3 = Color3.fromRGB(16, 17, 23)
 MainFrame.BorderSizePixel = 0
 MainFrame.Parent = ScreenGui
+State.HubMainFrame = MainFrame
 
 local mainCorner = Instance.new("UICorner")
 mainCorner.CornerRadius = UDim.new(0, 12)
@@ -4275,8 +4006,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v4.7 | Pixel Blade [Auto-Clicker M1 + Healer/Drainer #1]"
-    or "⚔️ Delta Hub v4.7 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v4.8 | Pixel Blade [Crash-Free Auto-Clicker + Healer #1]"
+    or "⚔️ Delta Hub v4.8 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -4645,7 +4376,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v4.7 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v4.8 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -5260,4 +4991,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v4.7] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v4.8] Loaded! Active Game Detected: " .. tostring(CurrentGame))
