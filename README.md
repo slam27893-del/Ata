@@ -1,8 +1,8 @@
-# ⚔️🗡️ Multi-Game Delta Hub [PROTECTED v4.7]
+# ⚔️🗡️ Multi-Game Delta Hub [PROTECTED v4.8]
 
 سكربت شامل ومحمي بالكامل لتطبيق **Delta Executor** (جوال Android / iOS وكمبيوتر PC) يدعم لعبتين في رابط واحد مع **كشف تلقائي للعبة وعزل كامل للتبويبات**:
 
-1. **🗡️ Pixel Blade (بكسل بليد - يدعم تحديث World 5: The Sunken Depths / حدث CHRONOS Arc 2 - أوتو كليكر سريع ونقي للضرب المستمر + أولوية قصوى للأعداء المعالجين والمستنزفين + ثبات تنقل الغرف من v4.6 بدون أي لاق)**
+1. **🗡️ Pixel Blade (بكسل بليد - يدعم تحديث World 5: The Sunken Depths / حدث CHRONOS Arc 2 - أوتو كليكر آمن 100% بدون كراش + أولوية قصوى للأعداء المعالجين والمستنزفين + ثبات تنقل الغرف من v4.6 بدون أي لاق)**
 2. **⚔️ Attack on Titan: Revolution (هجوم العمالقة: الثورة - AOT:R)**
 
 ---
@@ -17,23 +17,18 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/slam27893-del/Ata/mai
 
 ---
 
-## 🔥 ما الجديد في التحديث (v4.7)؟
+## 🔥 ما الجديد في التحديث (v4.8)؟
 
-### 1️⃣ نظام أوتو كليكر نقي وسريع (`Pure Fast Auto-Clicker M1 Engine`) 🗡️
-- **لماذا لم تكن الكلكات تضرب بالسيف في `v4.6`؟**
-  1. كان السكربت يمرر جدول Lua وهمي (`mockInput`) إلى حدث `InputBegan` داخل `Character.localChar`، بينما كود اللعبة الأصلي يحاول استدعاء `input.Changed:Connect(...)` (الموجود فقط في `InputObject` الحقيقي)، مما كان يسبب خطأ داخل `localChar` فيعلق زر السيف (`🗡️`) في وضع الشحن الوردي ويتوقف عن الضرب!
-  2. كما كان البحث عن زر السيف يصعد إلى الإطار الأب (`swordBtn.Parent`) فيضغط معه أزرار الصد (`🛡️`) والداش والمهارات.
-- **الحل في `v4.7` (أوتو كليكر نقي `11` ضربة/ثانية)**:
-  - إزالة تمرير الجداول الوهمية لـ `InputBegan` نهائياً وعدم لمس الإطار الأب (`Parent`) إطلاقاً.
-  - تشغيل حلقة **أوتو كليكر مستقل وسريع (`Loop 2G` كل `0.09` ثانية)** يرسل نقرات فورية بدون تأخير (`0-delay tap`) عبر:
-    - `VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true/false, game, 0)` (طريقة `thha3203` الأصلية).
-    - `VirtualUser:CaptureController()` + `VirtualUser:ClickButton1(Vector2.new(0, 0))`.
-    - النقر المباشر على مركز زر السيف (`🗡️`) فقط (`MouseButton1Click` + `Activated` + `SendMouseButtonEvent`) مع `mouse1click()` و `Tool:Activate()` و `remotes.swing:FireServer()` وتصفير أي تعليق شحن أو انتظار في `getsenv(Character.localChar)`.
+### 1️⃣ إصلاح الكراش الفوري عند تفعيل السكربت (`100% Crash-Free Pure Auto-Clicker`) 🛡️
+- **سبب الكراش (الخروج من تطبيق روبلوكس) في `v4.7`**:
+  1. في `v4.7` تمت إضافة استدعاء `VirtualUser:CaptureController()` + `VirtualUser:ClickButton1` بالتزامن مع `firesignal(o.Activated)` و `getconnections` وحلقة `Loop 2G` التي تعمل منذ أول لحظة لتشغيل السكربت، وهو ما يسبب **انهياراً أصلياً (Native C++ Crash) في محرك روبلوكس على أندرويد (Delta Android)** يغلق التطبيق فوراً!
+- **الحل الجذري في `v4.8`**:
+  - **إزالة `VirtualUser` و `firesignal` و `getconnections` و `Loop 2G` وتعديل جدول `getsenv` بالكامل من نظام الأوتو كليكر!**
+  - الاعتماد **حصرياً** على `VirtualInputManager:SendMouseButtonEvent` الرسمي الآمن 100% على أندرويد وPC، مع النقر الدقيق على مركز زر السيف (`🗡️`) بالإحداثيات المقاسة من شاشة الجوال (`0.7855, 0.6962`) والتحقق من عدم تغطية نافذة السكربت لزر السيف.
 
 ### 2️⃣ أولوية قصوى للأعداء الذين يستنزفون أو يعالجون الأعداء الآخرين (`Healer / Drainer #1 Priority`) 💉
 - **دون أي تعديل على نظام تنقل الغرف أو الأداء (`Zero Lag`)**:
-  1. **الأولوية الأولى داخل الغرفة الحالية (`💉 [معالج/مستنزف]`)**:
-     - يكشف السكربت تلقائياً أي عدو يمتلك شعاع علاج أو استنزاف نشط (`Beam` / `Tether` / `Heal` / `Drain` / `Siphon` / `Leech`) أو ينتمي لفئة المعالجين والمستنزفين (`Healer`, `Priest`, `Shaman`, `Druid`, `Cultist`, `Witch`, `MoonWitch`, `BloodDemon`, `Vampire`, `Eyeball`, `Necromancer`, `Totem`, `Siphoner`, إلخ) ويضعه في **المرتبة الأولى قبل أي عدو آخر في الغرفة**!
+  1. **الأولوية الأولى داخل الغرفة الحالية (`💉 [معالج/مستنزف]`)**: أي عدو يمتلك شعاع علاج أو استنزاف نشط (`Beam` / `Tether` / `Heal` / `Drain` / `Siphon` / `Leech`) أو ينتمي لفئة المعالجين والمستنزفين (`Healer`, `Priest`, `Shaman`, `Druid`, `Cultist`, `Witch`, `MoonWitch`, `BloodDemon`, `Vampire`, `Eyeball`, `Necromancer`, `Totem`, `Siphoner`, إلخ).
   2. **الأولوية الثانية (`🏹 [بعيد المدى]`)**: الأعداء الذين يضربون من بعيد (`Archer`, `Bow`, `Crossbow`, `Cannon`, إلخ).
   3. **الأولوية الثالثة (`⚔️`)**: باقي وحوش الاشتباك القريب في نفس الغرفة.
-  4. **شلّ وضرب جميع المعالجين والمستنزفين في الغرفة في نفس اللحظة**: أثناء ضرب الهدف الحالي، يرسل `pbDamageModel` تلقائياً `onHit` + `abilityHit (stun = 2s)` لأي معالج أو مستنزف نشط آخر داخل نفس الغرفة حتى لا يتمكن من علاج الوحوش أو استنزافك إطلاقاً!
+  4. **شلّ وضرب جميع المعالجين والمستنزفين في الغرفة في نفس اللحظة** عبر `onHit` + `abilityHit (stun = 2s)`.
