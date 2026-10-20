@@ -1,15 +1,17 @@
-# ⚔️ سكربت Multi-Game Delta Hub [PROTECTED v3.8 - World 5: The Sunken Depths / CHRONOS]
+# ⚔️ سكربت Multi-Game Delta Hub [PROTECTED v3.9 - World 5: The Sunken Depths / CHRONOS]
 
 سكربت شامل ومحمي بالكامل يعمل عبر **رابط واحد فقط** مع **الكشف التلقائي عن اللعبة وعزل القوائم تلقائياً (Strict Per-Game UI Isolation)** على مشغل **Delta Executor** (أندرويد، iOS، وكمبيوتر):
-1. **🗡️ Pixel Blade (تحديث World 5: The Sunken Depths / بداية Arc 2 وحدث CHRONOS — v3.8)**:
+1. **🗡️ Pixel Blade (تحديث World 5: The Sunken Depths / بداية Arc 2 وحدث CHRONOS — v3.9)**:
    - عند فتح السكربت داخل **Pixel Blade** تظهر **فقط** تبويبات Pixel Blade ويعمل كل من **الفارم التلقائي، الهالة (Kill Aura)، تكسير الصناديق، اختيار الترقيات، وفتح الصناديق** تلقائياً فور التشغيل.
-   - **محرك v3.8 المتوازي سداسي الخيوط (6-Thread Parallel Non-Blocking Engine) المدمج من (`thha3203 v5` + `Mana-scripts` + `thaemmayanh` + `lucas0conhecimento` + `Fog1ch` + `Killer-hub`)**:
-     - **فصل الحلقات إلى 6 مسارات مستقلة غير متوقفة (`Loop 2A..2F`)**: حل جذري لمشكلة توقف السكربت بسبب استدعاء `require(plrStats)` أو انتظار انتقال الغرف، بحيث تعمل الهالة وتكسير الصناديق والترقيات والطيران في مسارات منفصلة تماماً وبلا أي تجميد.
-     - **تثبيت الطيران خلف وفوق الأعداء 60 مرة في الثانية (`Heartbeat Continuous Aerial Follow`)**: التعلق المستمر خلف العدو بـ `6.5` studs وفوقه بـ `1.5` studs مع توجيه السلاح نحوه وتصفير الجاذبية والتصادم (`CanCollide = false`).
-     - **كشف شامل لجميع أعداء الدنجن و World 5 والغارات**: استهداف جميع الأعداء الحقيقيين (`hadEntrance ~= nil` أو `basehitbox` أو `Humanoid + HumanoidRootPart`) مع تجاهل فخاخ الأرضية (`teeth trap`) والصناديق والديكورات.
-     - **نظام التدمير الذكي للصناديق والبراميل (`Adaptive Breakables Destroyer`)**: كسر جميع الكائنات القابلة للكسر (`breakable` / `crate` / `barrel` / `box` / `pot` / `vase` / `urn` / `crystal` / والكائنات ذات `Humanoid` بدون `HumanoidRootPart`) دون خلط `-math.huge` مع `+math.huge` في نفس الضربة لمنع تحول صحة الصندوق إلى `NaN`.
-     - **اختيار الترقيات التلقائي المتوافق مع الجوال والكمبيوتر**: إرسال `plrUpgrade:FireServer(1..3)` + ضغط زر `Two` + النقر على أزرار `upgradeFrame` مع نقل النافذة خارج الشاشة (`UDim2.new(0, 0, -1.1, 0)`) دون إخفاء `Visible` حتى لا يتعطل نظام الترقية داخل اللعبة.
-     - **انتقال ذكي وشامل بين الغرف (`ExitZone` + `Campfire` + `ProximityPrompt` + `6->7` / `7->8` / `8->9` / `20->BossRoom`)**.
+   - **محرك v3.9 فائق الخفة بدون لاق (Zero-Lag & Strict Sequential Room Progression Engine)**:
+     - **إزالة اللاج بالكامل (100% Zero-Lag Optimization)**:
+       - إزالة استدعاء `getsenv(localChar)` و`GetDescendants()` من داخل `RunService.Heartbeat` (التي كانت تعمل 60 مرة في الثانية وتسبب تقطيعاً قوياً) وتخزين `getsenv` في الذاكرة لمرة واحدة فقط لكل حياة.
+       - تنظيم إرسال مهارة `useAbility("tornado")` بحد أقصى مرة كل `2.5` ثانية لمنع تراكم مؤثرات الإعصار البصرية، مع الإبقاء على الضرر الفوري عبر `onHit` و`abilityHit`.
+       - إيقاف تكرار الضرب المزدوج بين حلقة `Kill Aura` وحلقة `Auto Farm Dungeon`، وفحص `workspace:GetChildren()` فقط بدلاً من البحث العميق في آلاف المجسمات.
+     - **انتقال متسلسل ودقيق غرفة بغرفة بالترتيب الصحيح (`Strict Room-by-Room Progression`)**:
+       - تصفية الأعداء بصرامة عبر `hadEntrance ~= nil` (أو `BookHand` / `worm`) لمنع الانتقال إلى مجسمات الزينة أو الشخصيات الجانبية في الغرف الأخرى.
+       - **أولوية الغرفة الحالية أولاً (`hadEntrance == true`)**: لا يغادر اللاعب الغرفة الحالية أبداً طالما بقي فيها عدو واحد حي، وفور تنظيف الغرفة الحالية ينتقل إلى **أقرب عدو في الغرفة المجاورة مباشرة (`hadEntrance == false`)** مع مهلة فتح الباب (`1.1s`)، دون القفز العشوائي عبر `ProximityPrompt` أو `ExitZone`.
+       - دعم الانتقال التلقائي في غرف الاستراحة (`CamnpfireRocky` و `6->7` Normal، `7->8` Heroic، `8->9` Nightmare، و`20->BossRoom`).
    - **🎣 صيد تلقائي تيربو بالصنارة (Turbo Auto Fishing)**:
      - تفاعل فوري **60 مرة في الثانية (`RenderStepped`)** مع ميني جيم الصيد (الضغط المستمر للدائرة الخضراء + النقر التيربو السريع للسحب الأزرق).
 
