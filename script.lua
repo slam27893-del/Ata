@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v4.2 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v4.3 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Overhead Jump-Click Engine v4.2)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Zero-Lag Mobile Jump-Click v4.3)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -1553,29 +1553,33 @@ local function findAliveBookHand()
     return nil, nil
 end
 
--- Strict Room-by-Room Enemy Finder (Exact v4.0 Anti-Boss-Jump Engine, without client HRP anchoring):
+-- Strict Step-by-Step Closest Enemy Finder (v4.3 Anti-Boss-Jump Engine):
 -- 1. Living BookHand (Korth boss shield phase)
--- 2. Enemies in CURRENT ACTIVE ROOM (hadEntrance == true) -> Ranged in current room first, then closest in current room
--- 3. ONLY when current room is 100% cleared:
---    - Measures distance from State.PB_LastActiveRoomPos (the room just cleared) so the player never jumps to the Boss Arena!
---    - Prioritizes nearby non-boss next-room mobs (<= 320 studs from cleared room) over pre-spawned Boss Arena mobs!
+-- 2. Enemies in CURRENT ROOM (within 85 studs of player):
+--    - Ranged (Archer/Mage) within 85 studs first, then hadEntrance == true within 85 studs, then any living mob within 85 studs.
+-- 3. ONLY when 100% of enemies within 85 studs are dead:
+--    - Picks the SINGLE CLOSEST living enemy by distance (distFromMe), strictly capped to <= 190 studs (adjacent next room)
+--      so the player NEVER jumps across the map (350+ studs) into the Boss Arena after Room 1!
 local function findBestPBTarget(isRaid)
     refreshCharacterRefs()
     if not Character or not HumanoidRootPart then return nil, nil end
     local myPos = HumanoidRootPart.Position
-    local refPos = State.PB_LastActiveRoomPos or myPos
     local now = tick()
 
-    -- 1. If Korth spawned a living BookHand, kill BookHand first!
+    -- 1. If Korth spawned a living BookHand within 200 studs, kill BookHand first!
     local bhMob, bhPart = findAliveBookHand()
-    if bhMob and bhPart then
+    if bhMob and bhPart and (bhPart.Position - myPos).Magnitude <= 200 then
         return bhMob, bhPart
     end
 
-    local activeRangedMob, activeRangedPart, activeRangedDist = nil, nil, math.huge
-    local activeRoomMob, activeRoomPart, activeRoomDist = nil, nil, math.huge
-    local nextNearbyMob, nextNearbyPart, nextNearbyDist = nil, nil, math.huge
-    local nextFarMob, nextFarPart, nextFarDist = nil, nil, math.huge
+    local currentRangedMob, currentRangedPart, currentRangedDist = nil, nil, math.huge
+    local currentActiveMob, currentActivePart, currentActiveDist = nil, nil, math.huge
+    local currentRoomMob, currentRoomPart, currentRoomDist = nil, nil, math.huge
+    local nextAdjacentMob, nextAdjacentPart, nextAdjacentDist = nil, nil, math.huge
+
+    -- Allow up to 190 studs for the immediately adjacent next room; if 0 mobs within 190 studs for > 4.0s, allow up to 270 studs
+    local sinceLastRoom = State.PB_LastActiveRoomTime and (now - State.PB_LastActiveRoomTime) or 0
+    local maxNextRoomDist = isRaid and math.huge or ((sinceLastRoom >= 4.0) and 270 or 190)
 
     local allModels = collectAllPBModels()
     local lockedMap = State.PB_LockedMobIgnoreUntil or {}
@@ -1597,39 +1601,37 @@ local function findBestPBTarget(isRaid)
                         mobPos = v:GetPivot().Position
                     end)
                     local distFromMe = (mobPos - myPos).Magnitude
-                    local distFromLastRoom = (mobPos - refPos).Magnitude
                     local hadEnt = v:GetAttribute("hadEntrance")
 
-                    if hadEnt == true or v:FindFirstChild("worm") or isRaid then
-                        -- Enemy is in the CURRENT active room!
+                    if isRaid or distFromMe <= 85 or v:FindFirstChild("worm") then
+                        -- Enemy is inside the CURRENT room (<= 85 studs)!
                         State.PB_LastActiveRoomPos = mobPos
                         State.PB_LastActiveRoomTime = now
-                        if (string.find(v.Name, "Archer", 1, true) or string.find(v.Name, "Mage", 1, true)) and distFromMe <= 80 then
-                            if distFromMe < activeRangedDist then
-                                activeRangedDist = distFromMe
-                                activeRangedMob = v
-                                activeRangedPart = part
-                            end
+
+                        if (string.find(v.Name, "Archer", 1, true) or string.find(v.Name, "Mage", 1, true)) and distFromMe < currentRangedDist then
+                            currentRangedDist = distFromMe
+                            currentRangedMob = v
+                            currentRangedPart = part
                         end
-                        if distFromMe < activeRoomDist then
-                            activeRoomDist = distFromMe
-                            activeRoomMob = v
-                            activeRoomPart = part
+                        if hadEnt == true and distFromMe < currentActiveDist then
+                            currentActiveDist = distFromMe
+                            currentActiveMob = v
+                            currentActivePart = part
                         end
-                    else
-                        -- Enemy has hadEntrance == false (waiting in a future room)
+                        if distFromMe < currentRoomDist then
+                            currentRoomDist = distFromMe
+                            currentRoomMob = v
+                            currentRoomPart = part
+                        end
+                    elseif distFromMe <= maxNextRoomDist then
+                        -- Enemy is in the ADJACENT next room (> 85 and <= maxNextRoomDist studs)
                         local isBoss = PB_BOSS_NAMES[v.Name] == true
-                        if not isBoss and distFromLastRoom <= 320 then
-                            if distFromLastRoom < nextNearbyDist then
-                                nextNearbyDist = distFromLastRoom
-                                nextNearbyMob = v
-                                nextNearbyPart = part
-                            end
-                        else
-                            if distFromLastRoom < nextFarDist then
-                                nextFarDist = distFromLastRoom
-                                nextFarMob = v
-                                nextFarPart = part
+                        -- Never pick a Boss > 150 studs away right after clearing a normal room
+                        if not isBoss or distFromMe <= 150 or sinceLastRoom >= 4.0 then
+                            if distFromMe < nextAdjacentDist then
+                                nextAdjacentDist = distFromMe
+                                nextAdjacentMob = v
+                                nextAdjacentPart = part
                             end
                         end
                     end
@@ -1638,36 +1640,13 @@ local function findBestPBTarget(isRaid)
         end
     end
 
-    -- Always finish 100% of active room enemies (hadEntrance == true) first!
-    if activeRangedMob then return activeRangedMob, activeRangedPart end
-    if activeRoomMob then return activeRoomMob, activeRoomPart end
+    -- 1. Always finish 100% of enemies in the CURRENT room (<= 85 studs) first!
+    if currentRangedMob then return currentRangedMob, currentRangedPart end
+    if currentActiveMob then return currentActiveMob, currentActivePart end
+    if currentRoomMob then return currentRoomMob, currentRoomPart end
 
-    -- If a nearby non-boss enemy in the adjacent next room (<= 320 studs) is waiting, go to it!
-    if nextNearbyMob then
-        return nextNearbyMob, nextNearbyPart
-    end
-
-    -- Wait at least 1.6s after clearing the active room before considering any faraway/boss mob (gives Room 2 time to spawn!)
-    if State.PB_LastActiveRoomTime and (now - State.PB_LastActiveRoomTime) < 1.6 then
-        return nil, nil
-    end
-
-    -- If there is an unvisited numbered room (e.g. "2", "3", "4", "5") closer than the faraway Boss Arena, step into that numbered room first!
-    if nextFarMob and State.PB_LastActiveRoomPos then
-        local visitedRooms = State.PB_VisitedNumberedRooms or {}
-        for _, child in ipairs(workspace:GetChildren()) do
-            local rNum = tonumber(child.Name)
-            if rNum and rNum >= 2 and not visitedRooms[child] then
-                local ok, rPos = pcall(function() return child:GetPivot().Position end)
-                if ok and rPos and (rPos - refPos).Magnitude < nextFarDist then
-                    -- Let checkPBDungeonRoomTransition step into this numbered room first!
-                    return nil, nil
-                end
-            end
-        end
-    end
-
-    return nextFarMob, nextFarPart
+    -- 2. Only when current room is 100% empty, step into the closest adjacent room (<= 190 studs)!
+    return nextAdjacentMob, nextAdjacentPart
 end
 
 -- Lightweight Remote Breakables Destroyer (Exact Mana-scripts line 282-286: zero Tornado lag!)
@@ -1701,7 +1680,7 @@ local function pbBreakAllBreakablesRemotely()
                         end
                     end)
                     count = count + 1
-                    if count >= 6 then
+                    if count >= 4 then
                         break
                     end
                 end
@@ -1712,7 +1691,7 @@ local function pbBreakAllBreakablesRemotely()
     return count > 0
 end
 
--- God Damage + 20s Stun Buff (TexRBLX + thha3203 custom-pixel-blade + Vortex) & Burst Auto Heal
+-- God Damage + 20s Stun Buff (TexRBLX + thha3203 custom-pixel-blade + Vortex) & Zero-Lag Auto Heal
 -- IMPORTANT: NEVER holds Block = true during combat (holding Block prevents sword M1 / Overhead swings!)
 local function applyPBTempBuffAndHeal(forceBuff)
     refreshCharacterRefs()
@@ -1728,7 +1707,7 @@ local function applyPBTempBuffAndHeal(forceBuff)
 
     -- Ensure Block is FALSE while attacking so the character's sword swings non-stop without getting stuck in Shield stance!
     local isAttackingMode = Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_KillAura
-    if blockRemote and (forceBuff or (now - (State.PB_LastBlockTime or 0)) >= 1.0) then
+    if blockRemote and (forceBuff or (now - (State.PB_LastBlockTime or 0)) >= 2.0) then
         State.PB_LastBlockTime = now
         pcall(function()
             blockRemote:FireServer(not isAttackingMode)
@@ -1737,7 +1716,7 @@ local function applyPBTempBuffAndHeal(forceBuff)
 
     if not abilityEvent then return end
 
-    -- Apply all 3 tempbuffs (including stunDur = 20 from custom-pixel-blade.lua!) to BOTH activeChar and Character
+    -- Apply all 3 tempbuffs (including stunDur = 20 from custom-pixel-blade.lua!) once every 20s
     if forceBuff or State.PB_LastBuffedChar ~= activeChar or (now - (State.PB_LastBuffTime or 0)) >= 20 then
         State.PB_LastBuffTime = now
         State.PB_LastBuffedChar = activeChar
@@ -1780,78 +1759,192 @@ local function applyPBTempBuffAndHeal(forceBuff)
         end)
     end
 
-    -- High-Speed Multi-Burst Auto Heal:
-    -- Heals every 0.20s normally, and fires a 4x burst every 0.12s whenever player HP drops below MaxHealth so the player NEVER dies!
+    -- Smooth Zero-Lag Auto Heal (fires every 0.35s, 2x when hurt)
     local isHurt = Humanoid and Humanoid.MaxHealth > 0 and Humanoid.Health < Humanoid.MaxHealth
-    local healInterval = isHurt and 0.12 or 0.20
-    if forceBuff or (now - (State.PB_LastHealTime or 0)) >= healInterval then
+    if forceBuff or (now - (State.PB_LastHealTime or 0)) >= 0.35 then
         State.PB_LastHealTime = now
-        local burstCount = isHurt and 4 or 1
+        local burstCount = isHurt and 2 or 1
         pcall(function()
-            for _, ch in ipairs({ activeChar, Character }) do
-                if ch then
-                    for _ = 1, burstCount do
-                        abilityEvent:FireServer({
-                            char = ch,
-                            name = "heal",
-                            amount = 1
-                        })
-                    end
-                end
+            for _ = 1, burstCount do
+                abilityEvent:FireServer({
+                    char = activeChar,
+                    name = "heal",
+                    amount = 1
+                })
             end
         end)
     end
 end
 
--- Overhead Jump + Continuous Non-Stop Click Attack Engine:
--- Forces the character into Jumping/Airborne state while firing non-stop M1 clicks so the sword's "Overhead" upgrade activates on every hit!
-local function pbPerformRealM1Attack()
+-- Cached Mobile Sword Button (🗡️) & Jump Button (^) Finder (Scans at most once every 3.0s for ZERO lag!)
+local function pbGetMobileCombatButtons()
     local now = tick()
-    if (now - (State.PB_LastM1Time or 0)) < 0.07 then return end
-    State.PB_LastM1Time = now
+    if State.PB_CachedSwordBtn and State.PB_CachedSwordBtn.Parent and (now - (State.PB_LastBtnScanTime or 0)) < 3.0 then
+        return State.PB_CachedSwordBtn, State.PB_CachedJumpBtn
+    end
+    if (now - (State.PB_LastBtnScanTime or 0)) < 3.0 then
+        return State.PB_CachedSwordBtn, State.PB_CachedJumpBtn
+    end
+    State.PB_LastBtnScanTime = now
+
+    local swordBtn = nil
+    local jumpBtn = nil
 
     pcall(function()
-        -- 1. Trigger Real Jump State for "Overhead" Sword Upgrade!
-        if Humanoid then
-            Humanoid.Jump = true
-            if (now - (State.PB_LastJumpStateTick or 0)) >= 0.14 then
-                State.PB_LastJumpStateTick = now
-                Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+        local gameUI = PlayerGui:FindFirstChild("gameUI")
+        local touchGui = PlayerGui:FindFirstChild("TouchGui")
+
+        if touchGui then
+            local jBtn = touchGui:FindFirstChild("JumpButton", true)
+            if jBtn and jBtn:IsA("GuiObject") then
+                jumpBtn = jBtn
             end
         end
-        if HumanoidRootPart then
-            HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, 24, 0)
-        end
 
-        -- 2. Activate Tool if equipped
-        local rawChar = getPBRawCharacter()
-        for _, ch in ipairs({ Character, rawChar }) do
-            if ch then
-                local tool = ch:FindFirstChildOfClass("Tool")
-                if tool then
-                    pcall(function() tool:Activate() end)
+        local bestSwordArea = 0
+        local bestJumpY = 0
+        local container = gameUI or PlayerGui
+
+        for _, obj in ipairs(container:GetDescendants()) do
+            if obj ~= ScreenGui and not obj:IsDescendantOf(ScreenGui) and obj:IsA("GuiButton") and isGuiVisible(obj) then
+                local pos = obj.AbsolutePosition
+                local sz = obj.AbsoluteSize
+                local cx = pos.X + sz.X * 0.5
+                local cy = pos.Y + sz.Y * 0.5
+                local nameLow = string.lower(obj.Name)
+                local parentLow = obj.Parent and string.lower(obj.Parent.Name) or ""
+
+                -- Check explicit button names first
+                if string.find(nameLow, "attack", 1, true)
+                    or string.find(nameLow, "swing", 1, true)
+                    or string.find(nameLow, "sword", 1, true)
+                    or string.find(nameLow, "slash", 1, true)
+                    or string.find(nameLow, "m1", 1, true)
+                    or string.find(parentLow, "attack", 1, true)
+                    or string.find(parentLow, "swing", 1, true) then
+                    swordBtn = obj
+                elseif string.find(nameLow, "jump", 1, true) or string.find(parentLow, "jump", 1, true) then
+                    jumpBtn = obj
+                end
+
+                -- Geometric detection for Pixel Blade's bottom-right Mobile action cluster:
+                -- The Sword Attack button (🗡️) is the LARGEST circular button in the bottom-right quadrant!
+                if cx > vp.X * 0.64 and cy > vp.Y * 0.45 and sz.X >= 28 and sz.X <= vp.X * 0.25 and sz.Y <= vp.Y * 0.38 then
+                    local area = sz.X * sz.Y
+                    if not swordBtn and cy < vp.Y * 0.83 and area > bestSwordArea then
+                        bestSwordArea = area
+                        State.PB_GeomSwordBtn = obj
+                    end
+                    if not jumpBtn and cx > vp.X * 0.78 and cy > vp.Y * 0.78 and cy > bestJumpY then
+                        bestJumpY = cy
+                        State.PB_GeomJumpBtn = obj
+                    end
                 end
             end
         end
 
-        -- 3. Non-Stop Real Clicks (VirtualInputManager + Delta mouse1click + VirtualUser)
-        if VirtualInputManager then
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+        if not swordBtn then
+            swordBtn = State.PB_GeomSwordBtn
         end
-        if mouse1click then
-            pcall(mouse1click)
+        if not jumpBtn then
+            jumpBtn = State.PB_GeomJumpBtn
         end
-        if VirtualUser then
-            pcall(function()
-                VirtualUser:CaptureController()
-                VirtualUser:ClickButton1(Vector2.new(0, 0))
-            end)
+    end)
+
+    State.PB_CachedSwordBtn = swordBtn
+    State.PB_CachedJumpBtn = jumpBtn
+    return swordBtn, jumpBtn
+end
+
+local function pbTriggerGuiButtonInstant(btn)
+    if not btn then return end
+    pcall(function()
+        if firesignal then
+            pcall(firesignal, btn.MouseButton1Down)
+            pcall(firesignal, btn.Activated)
+            pcall(firesignal, btn.MouseButton1Click)
+            pcall(firesignal, btn.MouseButton1Up)
+        end
+        if getconnections then
+            for _, sig in ipairs({ btn.MouseButton1Down, btn.Activated, btn.MouseButton1Click }) do
+                if sig then
+                    for _, conn in ipairs(getconnections(sig)) do
+                        if conn.Fire then
+                            pcall(function() conn:Fire() end)
+                        elseif conn.Function then
+                            pcall(conn.Function)
+                        end
+                    end
+                end
+            end
         end
     end)
 end
 
--- Instant-Kill Overhead Jump-Click Damage Engine (Continuous Jump + Clicks + swing + onHit + throttled Tornado stun)
+-- Overhead Jump + Continuous Non-Stop Click Attack Engine (Works on Android Mobile & PC with ZERO lag!):
+-- Triggers real Roblox Jump + taps the on-screen Mobile Sword Button (🗡️) & Jump Button (^) + PC mouse1click!
+local function pbPerformRealM1Attack()
+    local now = tick()
+    if (now - (State.PB_LastM1Time or 0)) < 0.16 then return end
+    State.PB_LastM1Time = now
+
+    pcall(function()
+        -- 1. Trigger Real Physical Jump for "Overhead" Sword Upgrade!
+        if Humanoid then
+            Humanoid.Jump = true
+            local st = Humanoid:GetState()
+            if st ~= Enum.HumanoidStateType.Jumping and st ~= Enum.HumanoidStateType.Freefall then
+                pcall(function()
+                    Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                end)
+            end
+        end
+
+        -- 2. Find & Press Mobile Sword Button (🗡️) + Mobile Jump Button (^) in PlayerGui.gameUI
+        local swordBtn, jumpBtn = pbGetMobileCombatButtons()
+        if jumpBtn then
+            pbTriggerGuiButtonInstant(jumpBtn)
+        end
+        if swordBtn then
+            pbTriggerGuiButtonInstant(swordBtn)
+            if VirtualInputManager then
+                local pos = swordBtn.AbsolutePosition
+                local sz = swordBtn.AbsoluteSize
+                local inset = GuiService:GetGuiInset()
+                local sx = math.floor(pos.X + sz.X * 0.5)
+                local sy = math.floor(pos.Y + sz.Y * 0.5 + inset.Y)
+                VirtualInputManager:SendMouseButtonEvent(sx, sy, 0, true, game, 0)
+                VirtualInputManager:SendMouseButtonEvent(sx, sy, 0, false, game, 0)
+            end
+        elseif VirtualInputManager then
+            -- Fallback to exact bottom-right Sword Button coordinate (78.5% X, 70.5% Y) + PC (0, 0)
+            local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+            if UserInputService.TouchEnabled then
+                local sx = math.floor(vp.X * 0.785)
+                local sy = math.floor(vp.Y * 0.705)
+                VirtualInputManager:SendMouseButtonEvent(sx, sy, 0, true, game, 0)
+                VirtualInputManager:SendMouseButtonEvent(sx, sy, 0, false, game, 0)
+            else
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+            end
+        end
+
+        -- 3. Activate Tool & Delta mouse1click
+        if Character then
+            local tool = Character:FindFirstChildOfClass("Tool")
+            if tool then
+                pcall(function() tool:Activate() end)
+            end
+        end
+        if mouse1click then
+            pcall(mouse1click)
+        end
+    end)
+end
+
+-- Zero-Lag Overhead Jump-Click Damage Engine (Jump + Mobile/PC Sword Click + swing + onHit)
 local function pbDamageModel(v, wpnDmg)
     if not v or not v:IsA("Model") or not v.Parent then return end
     local pbRemotes = getPBRemotes()
@@ -1860,7 +1953,6 @@ local function pbDamageModel(v, wpnDmg)
     local swing = pbRemotes:FindFirstChild("swing")
     local onHit = pbRemotes:FindFirstChild("onHit")
     local useAbility = pbRemotes:FindFirstChild("useAbility")
-    local abilityHit = pbRemotes:FindFirstChild("abilityHit")
 
     local worldType = workspace:FindFirstChild("worldType")
     local isAncientSands = worldType and worldType.Value == "AncientSands"
@@ -1872,253 +1964,143 @@ local function pbDamageModel(v, wpnDmg)
     end
 
     pcall(function()
-        -- Execute Jump + Non-Stop M1 Click (Overhead Slash!)
+        -- Execute Jump + Non-Stop M1 Sword Click (Overhead Slash!)
         pbPerformRealM1Attack()
 
         if swing then
             swing:FireServer()
         end
         if onHit and targetObj then
-            onHit:FireServer(targetObj, 9999999999, {}, 0)
             onHit:FireServer(targetObj, wpnDmg or currentPBWeaponDamage(), {}, 0)
+            onHit:FireServer(targetObj, 9999999999, {}, 0)
         end
-
-        -- Throttle ability animations to once every 0.45s so they NEVER interrupt continuous Overhead M1 sword clicks!
-        local now = tick()
-        if (now - (State.PB_LastAbilityTick or 0)) >= 0.45 then
-            State.PB_LastAbilityTick = now
-            if useAbility then
-                useAbility:FireServer("tornado")
-                if v.Name == "Maneater" or v:FindFirstChild("worm") then
-                    useAbility:FireServer("lunarSpell")
-                end
-            end
-            if abilityHit and hum and hum.Health > 0 then
-                abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 5 } })
-                abilityHit:FireServer(hum, 9999999999, { ["stun"] = { ["dur"] = 5 } })
-            end
+        if useAbility and (v.Name == "Maneater" or v:FindFirstChild("worm")) then
+            useAbility:FireServer("lunarSpell")
         end
     end)
 end
 
--- Active Room Mass Kill (Throttled to 0.35s so Overhead sword clicks never pause!)
-local function pbMassKillWithTornado(isRaid)
-    local now = tick()
-    if (now - (State.PB_LastMassKillTick or 0)) < 0.35 then return end
-    State.PB_LastMassKillTick = now
+-- Natural Jump-Friendly Combat Positioning (Exact thha3203 pixel-blade.lua M1 method):
+-- Moves 6.5 studs behind the monster when dist > 10, and preserves vertical jump physics when dist <= 10 so the player physically jumps & swings!
+local function pbPositionAtTarget(mob, part, forceTeleport)
+    refreshCharacterRefs()
+    if not mob or not part or not part.Parent or not HumanoidRootPart then return end
 
-    local pbRemotes = getPBRemotes()
-    if not pbRemotes then return end
-    local swing = pbRemotes:FindFirstChild("swing")
-    local onHit = pbRemotes:FindFirstChild("onHit")
-    local useAbility = pbRemotes:FindFirstChild("useAbility")
-    local abilityHit = pbRemotes:FindFirstChild("abilityHit")
-    local wpnDmg = currentPBWeaponDamage()
-    local myPos = HumanoidRootPart and HumanoidRootPart.Position or nil
-
-    pcall(function()
-        if swing then
-            swing:FireServer()
-        end
-        local allModels = collectAllPBModels()
-        local hitCount = 0
-        for _, v in ipairs(allModels) do
-            if v and v.Parent and isPBTrueEnemy(v, isRaid, false) then
-                local hadEnt = v:GetAttribute("hadEntrance")
-                local part = getPBMobTargetPart(v)
-                local dist = (myPos and part) and (part.Position - myPos).Magnitude or math.huge
-                if hadEnt == true or isRaid or dist <= 85 then
-                    local hum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
-                    if hum and hum.Health > 0 then
-                        if useAbility then
-                            useAbility:FireServer("tornado")
-                        end
-                        if onHit then
-                            onHit:FireServer(hum, 9999999999, {}, 0)
-                            onHit:FireServer(hum, wpnDmg, {}, 0)
-                        end
-                        if abilityHit then
-                            abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 5 } })
-                            abilityHit:FireServer(hum, 9999999999, { ["stun"] = { ["dur"] = 5 } })
-                        end
-                        hitCount = hitCount + 1
-                        if hitCount >= 6 then
-                            break
-                        end
-                    end
-                end
-            end
-        end
-    end)
-end
-
--- Overhead Jump-Slash Combat CFrame:
--- Continuously hops up and down (2.0 to 6.0 studs in the air) 5.2 studs behind the monster so every click is a jumping Overhead attack!
-local function pbComputeCombatCFrame(mob, part)
-    if not mob or not part or not part.Parent then return nil end
-
-    -- Continuous vertical jump wave (2.0 to 6.0 studs in air) for Overhead sword upgrade + Low-HP Air-Shield!
-    local jumpWave = 2.0 + math.abs(math.sin(tick() * 12)) * 4.0
-    if Humanoid and Humanoid.MaxHealth > 0 and Humanoid.Health > 0 and Humanoid.Health < (Humanoid.MaxHealth * 0.5) then
-        jumpWave = 8.5 + math.abs(math.sin(tick() * 12)) * 2.5
+    if Humanoid then
+        Humanoid.Jump = true
     end
 
     if mob.Name == "Maneater" or mob:FindFirstChild("worm") then
         local root = mob:FindFirstChild("Root") or mob:FindFirstChild("HumanoidRootPart") or part
         local mobPos = Vector3.new(root.Position.X, 35, root.Position.Z)
-        local targetPos = mobPos + (root.CFrame.LookVector * -6.5) + Vector3.new(0, jumpWave * 0.5, 0)
-        return CFrame.lookAt(targetPos, mobPos)
+        local targetPos = mobPos + (root.CFrame.LookVector * -7.0)
+        HumanoidRootPart.CFrame = CFrame.lookAt(targetPos, mobPos)
+        return
     elseif mob.Name == "BookHand" then
         local bh = mob:FindFirstChild("basehitbox") or mob:FindFirstChild("basehitbox", true) or part
-        return bh.CFrame * CFrame.new(0, jumpWave, 4.0)
-    elseif mob.Name == "Nekros" or mob.Name == "DarkNekros" then
-        local pivot = part.CFrame
-        pcall(function() pivot = mob:GetPivot() end)
-        local mobPos = pivot.Position
-        local targetPos = mobPos + (pivot.LookVector * 2.8) + Vector3.new(0, jumpWave, 0)
-        return CFrame.lookAt(targetPos, mobPos)
+        HumanoidRootPart.CFrame = bh.CFrame * CFrame.new(0, 3, 4.5)
+        return
+    end
+
+    local pivot = part.CFrame
+    pcall(function() pivot = mob:GetPivot() end)
+    local mobPos = pivot.Position
+    local offsetDir = (mob.Name == "Nekros" or mob.Name == "DarkNekros") and 3.5 or -6.5
+    local desiredXZPos = mobPos + (pivot.LookVector * offsetDir)
+
+    local myPos = HumanoidRootPart.Position
+    local distToMob = (mobPos - myPos).Magnitude
+    local horizDistToSpot = Vector2.new(myPos.X - desiredXZPos.X, myPos.Z - desiredXZPos.Z).Magnitude
+
+    if distToMob > 11 or horizDistToSpot > 4.5 or math.abs(myPos.Y - mobPos.Y) > 14 then
+        -- Teleport behind the monster at jump height (+3.5 studs Y)
+        local startPos = Vector3.new(desiredXZPos.X, mobPos.Y + 3.5, desiredXZPos.Z)
+        local lookAtPos = Vector3.new(mobPos.X, startPos.Y, mobPos.Z)
+        HumanoidRootPart.CFrame = CFrame.lookAt(startPos, lookAtPos)
     else
-        local pivot = part.CFrame
-        pcall(function() pivot = mob:GetPivot() end)
-        local mobPos = pivot.Position
-        local targetPos = mobPos + (pivot.LookVector * -5.2) + Vector3.new(0, jumpWave, 0)
-        return CFrame.lookAt(targetPos, mobPos)
+        -- Already behind the monster: keep current jumping Y height untouched so real Roblox Jump flies up & down naturally!
+        local keepY = math.clamp(myPos.Y, mobPos.Y + 0.5, mobPos.Y + 11.0)
+        local curPos = Vector3.new(desiredXZPos.X, keepY, desiredXZPos.Z)
+        local lookAtPos = Vector3.new(mobPos.X, keepY, mobPos.Z)
+        HumanoidRootPart.CFrame = CFrame.lookAt(curPos, lookAtPos)
     end
 end
 
-local function pbPositionAtTarget(mob, part, forceTeleport)
-    refreshCharacterRefs()
-    if not mob or not part or not HumanoidRootPart then return end
-    local cf = pbComputeCombatCFrame(mob, part)
-    if cf then
-        State.PB_ActiveFollowMob = mob
-        State.PB_ActiveFollowPart = part
-        State.PB_ActiveTargetCFrame = cf
-        if Humanoid then
-            Humanoid.Jump = true
-        end
-        HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, 24, 0)
-        HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
-        HumanoidRootPart.CFrame = cf
-    end
-end
-
--- Sequential Room Progression Engine (1->2->3->4->5->6->7->8->9 + Campfire + BossRoom):
--- Steps into the next numbered room in order when no active mobs exist, so the player NEVER skips rooms to the Boss Arena!
+-- Safe-Zone Campfire Transition ONLY (Requires player to ALREADY be standing inside the safe room within <= 75 studs!):
+-- NEVER teleports across the map from Room 1/2/3/4 into the Boss Arena!
 local function checkPBDungeonRoomTransition()
     refreshCharacterRefs()
     if not HumanoidRootPart then return false end
+    local myPos = HumanoidRootPart.Position
 
-    -- Clear combat follow lock while transitioning
+    -- Clear combat follow lock while waiting
     State.PB_ActiveFollowMob = nil
     State.PB_ActiveFollowPart = nil
 
-    -- 1. Step into the closest unvisited sequential numbered room ("2", "3", "4", "5", ...) near the last cleared room!
-    State.PB_VisitedNumberedRooms = State.PB_VisitedNumberedRooms or {}
-    local refPos = State.PB_LastActiveRoomPos or HumanoidRootPart.Position
-    local candidateRooms = {}
-
-    for _, child in ipairs(workspace:GetChildren()) do
-        local rNum = tonumber(child.Name)
-        if rNum and rNum >= 2 and not State.PB_VisitedNumberedRooms[child] then
-            local ok, rPos = pcall(function() return child:GetPivot().Position end)
-            if ok and rPos then
-                local d = (rPos - refPos).Magnitude
-                table.insert(candidateRooms, {
-                    room = child,
-                    roomNum = rNum,
-                    pos = rPos,
-                    dist = d
-                })
-            end
-        end
+    -- Only check safe-room transitions if 0 monsters have been alive for at least 4.5 full seconds!
+    local now = tick()
+    if State.PB_LastActiveRoomTime and (now - State.PB_LastActiveRoomTime) < 4.5 then
+        return false
     end
 
-    -- Sort by lowest room number first (2 -> 3 -> 4 -> 5...), then closest to last cleared room!
-    table.sort(candidateRooms, function(a, b)
-        if a.roomNum ~= b.roomNum then
-            return a.roomNum < b.roomNum
-        end
-        return a.dist < b.dist
-    end)
-
-    if #candidateRooms > 0 then
-        local nextR = candidateRooms[1]
-        State.PB_VisitedNumberedRooms[nextR.room] = true
-        local targetCF = CFrame.new(nextR.pos + Vector3.new(0, 5, 0))
-        State.PB_ActiveTargetCFrame = targetCF
-        HumanoidRootPart.CFrame = targetCF
-        State.PB_LastActiveRoomPos = nextR.pos
-        task.wait(1.2)
-        return true
-    end
-
-    local worldTypeObj = workspace:FindFirstChild("worldType")
-    local worldVal = worldTypeObj and tostring(worldTypeObj.Value) or ""
     local diffObj = workspace:FindFirstChild("difficulty")
     local diffVal = diffObj and tostring(diffObj.Value) or ""
 
-    -- 2. Room 20 -> BossRoom transition (Vortex_PixelBlade)
-    if workspace:FindFirstChild("20") and workspace:FindFirstChild("BossRoom") then
-        local bossRoom = workspace:FindFirstChild("BossRoom")
-        if bossRoom and not State.PB_VisitedFinalRoom[bossRoom] then
+    -- 1. Room 20 -> BossRoom transition ONLY if player is already standing inside Room 20 (<= 75 studs)
+    local r20 = workspace:FindFirstChild("20")
+    local bossRoom = workspace:FindFirstChild("BossRoom")
+    if r20 and bossRoom and not State.PB_VisitedFinalRoom[bossRoom] then
+        local ok20, pos20 = pcall(function() return r20:GetPivot().Position end)
+        if ok20 and pos20 and (pos20 - myPos).Magnitude <= 75 then
             State.PB_VisitedFinalRoom[bossRoom] = true
             local targetCF = CFrame.new(bossRoom:GetPivot().Position + Vector3.new(0, 5, 0))
-            State.PB_ActiveTargetCFrame = targetCF
             HumanoidRootPart.CFrame = targetCF
             task.wait(1.5)
             return true
         end
     end
 
-    -- 3. Safe-zone Campfire room transition: 6->7 (Normal), 7->8 (Heroic), 8->9 (Nightmare) (Exact thha3203 v3..v5 lines 365-379)
-    local canTransitionFinal = false
-    if worldVal == "AncientSands" then
-        canTransitionFinal = (workspace:FindFirstChild("Maneater") == nil)
-    else
-        canTransitionFinal = (workspace:FindFirstChild("LumberJack") == nil)
-    end
+    -- 2. Safe-zone Campfire transition: 6->7 (Normal), 7->8 (Heroic), 8->9 (Nightmare)
+    -- STRICT GUARD: Player MUST already be standing inside r6 / r7 / r8 (within <= 75 studs)!
+    local r6 = workspace:FindFirstChild("6")
+    local r7 = workspace:FindFirstChild("7")
+    local r8 = workspace:FindFirstChild("8")
+    local r9 = workspace:FindFirstChild("9")
 
-    if canTransitionFinal then
-        local r6 = workspace:FindFirstChild("6")
-        local r7 = workspace:FindFirstChild("7")
-        local r8 = workspace:FindFirstChild("8")
-        local r9 = workspace:FindFirstChild("9")
-
-        if diffVal == "Normal" and r6 and r7 and not State.PB_VisitedFinalRoom[r7] then
+    if diffVal == "Normal" and r6 and r7 and not State.PB_VisitedFinalRoom[r7] then
+        local ok6, pos6 = pcall(function() return r6:GetPivot().Position end)
+        if ok6 and pos6 and (pos6 - myPos).Magnitude <= 75 then
             State.PB_VisitedFinalRoom[r7] = true
-            local targetCF = CFrame.new(r7:GetPivot().Position + Vector3.new(0, 5, 0))
-            State.PB_ActiveTargetCFrame = targetCF
-            HumanoidRootPart.CFrame = targetCF
+            HumanoidRootPart.CFrame = CFrame.new(r7:GetPivot().Position + Vector3.new(0, 5, 0))
             task.wait(1.5)
             return true
-        elseif diffVal == "Heroic" and r7 and r8 and not State.PB_VisitedFinalRoom[r8] then
+        end
+    elseif diffVal == "Heroic" and r7 and r8 and not State.PB_VisitedFinalRoom[r8] then
+        local ok7, pos7 = pcall(function() return r7:GetPivot().Position end)
+        if ok7 and pos7 and (pos7 - myPos).Magnitude <= 75 then
             State.PB_VisitedFinalRoom[r8] = true
-            local targetCF = CFrame.new(r8:GetPivot().Position + Vector3.new(0, 5, 0))
-            State.PB_ActiveTargetCFrame = targetCF
-            HumanoidRootPart.CFrame = targetCF
+            HumanoidRootPart.CFrame = CFrame.new(r8:GetPivot().Position + Vector3.new(0, 5, 0))
             task.wait(1.5)
             return true
-        elseif diffVal == "Nightmare" and r8 and r9 and not State.PB_VisitedFinalRoom[r9] then
+        end
+    elseif diffVal == "Nightmare" and r8 and r9 and not State.PB_VisitedFinalRoom[r9] then
+        local ok8, pos8 = pcall(function() return r8:GetPivot().Position end)
+        if ok8 and pos8 and (pos8 - myPos).Magnitude <= 75 then
             State.PB_VisitedFinalRoom[r9] = true
-            local targetCF = CFrame.new(r9:GetPivot().Position + Vector3.new(0, 5, 0))
-            State.PB_ActiveTargetCFrame = targetCF
-            HumanoidRootPart.CFrame = targetCF
+            HumanoidRootPart.CFrame = CFrame.new(r9:GetPivot().Position + Vector3.new(0, 5, 0))
             task.wait(1.5)
             return true
         end
     end
 
-    -- 4. Campfire Checkpoint ("CamnpfireRocky") when next room hasn't spawned yet (Exact thaemmayanh/hub/test.lua line 157-161)
+    -- 3. Adjacent Campfire Checkpoint ("CamnpfireRocky") ONLY if within <= 85 studs of player
     for _, obj in ipairs(workspace:GetChildren()) do
         if obj:IsA("Model") and (obj.Name == "CamnpfireRocky" or obj.Name == "CampfireRocky") and not State.PB_VisitedCampfires[obj] then
             local campPart = obj:FindFirstChildWhichIsA("BasePart", true)
-            if campPart then
+            if campPart and (campPart.Position - myPos).Magnitude <= 85 then
                 State.PB_VisitedCampfires[obj] = true
-                local campCF = campPart.CFrame * CFrame.new(0, 3, 0)
-                State.PB_ActiveTargetCFrame = campCF
-                HumanoidRootPart.CFrame = campCF
-                task.wait(2.5)
+                HumanoidRootPart.CFrame = campPart.CFrame * CFrame.new(0, 3, 0)
+                task.wait(2.0)
                 return true
             end
         end
@@ -2164,14 +2146,14 @@ local function pbBringAndExpandTargets()
     end
 end
 
--- Continuous Multi-Target Kill Aura (Restored from v3.8: hits all nearby enemies + Tornado mass kill within 95 studs)
+-- Standalone Multi-Target Kill Aura (Zero-Lag: hits up to 3 nearby enemies within range)
 local function pbKillAllNearby(maxRange, isRaid)
     refreshCharacterRefs()
     local pbRemotes = getPBRemotes()
     if not pbRemotes or not HumanoidRootPart then return end
 
     local myPos = HumanoidRootPart.Position
-    local rangeLimit = maxRange or 95
+    local rangeLimit = maxRange or 85
     local wpnDmg = currentPBWeaponDamage()
     local count = 0
 
@@ -2183,15 +2165,11 @@ local function pbKillAllNearby(maxRange, isRaid)
             if dist <= rangeLimit then
                 pbDamageModel(v, wpnDmg)
                 count = count + 1
-                if count >= 6 then
+                if count >= 3 then
                     break
                 end
             end
         end
-    end
-
-    if count > 0 then
-        pbMassKillWithTornado(isRaid)
     end
 end
 
@@ -2752,25 +2730,9 @@ table.insert(State.Connections, RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- Pixel Blade Active Farm Continuous Overhead Jump-Follow & Velocity Control (Zero-Lag 60FPS Heartbeat)
+    -- Pixel Blade Anti-Spin Guard (Does NOT lock CFrame/Velocity in Heartbeat so real Roblox Jump + Sword Swing work naturally!)
     if Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid then
         HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
-
-        if State.PB_ActiveFollowMob and State.PB_ActiveFollowPart and State.PB_ActiveFollowMob.Parent and isPBMobAlive(State.PB_ActiveFollowMob) then
-            if Humanoid then
-                Humanoid.Jump = true
-            end
-            HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, 24, 0)
-            local cf = pbComputeCombatCFrame(State.PB_ActiveFollowMob, State.PB_ActiveFollowPart)
-            if cf then
-                State.PB_ActiveTargetCFrame = cf
-                HumanoidRootPart.CFrame = cf
-            end
-        else
-            HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
-            State.PB_ActiveFollowMob = nil
-            State.PB_ActiveFollowPart = nil
-        end
     end
 
     -- AOT:R Refill Pause
@@ -2840,19 +2802,13 @@ table.insert(State.Connections, RunService.Heartbeat:Connect(function()
     end
 end))
 
--- 2A. Dedicated Non-Stop Overhead Jump + Continuous Click Attack Loop (Runs every 0.08s = ~12.5 clicks/sec!)
+-- 2A. Standalone Kill Aura Loop (Paused when AutoFarm Dungeon/Raid is active so there is ZERO lag!)
 task.spawn(function()
     while State.Running do
-        task.wait(0.08)
-        if Config.PB_KillAura or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid then
+        task.wait(0.30)
+        if Config.PB_KillAura and not (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) then
             pcall(function()
-                -- Priority 1: Non-stop Jump + Clicks on active locked dungeon/raid target
-                if State.PB_ActiveFollowMob and State.PB_ActiveFollowMob.Parent and isPBMobAlive(State.PB_ActiveFollowMob) then
-                    pbDamageModel(State.PB_ActiveFollowMob, currentPBWeaponDamage())
-                end
-                -- Priority 2: Multi-target Kill Aura on all nearby monsters within range
-                local range = (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) and 85 or (Config.PB_KillAuraRange or 85)
-                pbKillAllNearby(range, Config.PB_AutoFarmRaid)
+                pbKillAllNearby(Config.PB_KillAuraRange or 85, false)
             end)
         end
     end
@@ -2861,7 +2817,7 @@ end)
 -- 2B. Dedicated Pixel Blade Remote Breakables Destroyer Loop (Zero-Lag Mana-scripts Method)
 task.spawn(function()
     while State.Running do
-        task.wait(0.45)
+        task.wait(0.60)
         if Config.PB_AutoBreakables or Config.PB_AutoFarmDungeon then
             pcall(pbBreakAllBreakablesRemotely)
         end
@@ -2871,7 +2827,7 @@ end)
 -- 2C. Dedicated Pixel Blade Auto Pick Upgrades & Off-Screen Mover Loop (Exact Mana-scripts Method)
 task.spawn(function()
     while State.Running do
-        task.wait(0.35)
+        task.wait(0.45)
         if Config.PB_AutoUpgrade then
             pcall(function()
                 local pbRemotes = getPBRemotes()
@@ -2897,15 +2853,16 @@ task.spawn(function()
     end
 end)
 
--- 2D. Dedicated Pixel Blade God Buff, Burst Auto Heal, Auto Block, Noclip & Inf Dash Loop
+-- 2D. Dedicated Pixel Blade God Buff, Smooth Auto Heal, Noclip & Throttled Inf Dash Loop (Zero Lag!)
 task.spawn(function()
     while State.Running do
-        task.wait(0.15)
+        task.wait(0.40)
         pcall(function()
             if Config.PB_GodBuffAndHeal or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_KillAura then
                 applyPBTempBuffAndHeal(false)
             end
-            if Config.PB_InfDashAndNoCD then
+            if Config.PB_InfDashAndNoCD and (tick() - (State.PB_LastInfDashTick or 0)) >= 3.0 then
+                State.PB_LastInfDashTick = tick()
                 applyPBInfDashAndNoCD()
             end
             if (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) and Character then
@@ -2919,20 +2876,20 @@ task.spawn(function()
     end
 end)
 
--- 2E. Dedicated Pixel Blade Hitbox Expander & Enemy Anchor/Bring Loop
+-- 2E. Dedicated Pixel Blade Hitbox Expander Loop
 task.spawn(function()
     while State.Running do
-        task.wait(0.35)
+        task.wait(0.50)
         if Config.PB_ExpandHitbox or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_BringMobs then
             pcall(pbBringAndExpandTargets)
         end
     end
 end)
 
--- 2F. Dedicated Pixel Blade Dungeon & Raid Auto Farm Movement + Room-by-Room Progression Loop
+-- 2F. Dedicated Pixel Blade Dungeon & Raid Auto Farm + Jump-Click Overhead M1 Loop (Zero Lag, Step-by-Step Room Progression!)
 task.spawn(function()
     while State.Running do
-        task.wait(0.18)
+        task.wait(0.20)
         pcall(function()
             refreshCharacterRefs()
             if (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) and HumanoidRootPart then
@@ -2947,15 +2904,12 @@ task.spawn(function()
                         local hp = math.floor(getPBMobCurrentHP(mob))
                         local hadEnt = mob:GetAttribute("hadEntrance")
 
-                        -- Smooth Next-Room Transition Delay + Re-Evaluation (Prevents jumping to a stale Boss Arena target!)
-                        if not isRaid and hadEnt == false and dist > 70 and State.PB_LastTransitionedMob ~= mob then
+                        -- Smooth Next-Room Transition Delay (Wait 1.0s when stepping into the adjacent room > 75 studs away)
+                        if not isRaid and hadEnt == false and dist > 75 and State.PB_LastTransitionedMob ~= mob then
                             State.PB_LastTransitionedMob = mob
-                            State.PB_ActiveFollowMob = nil
-                            State.PB_ActiveFollowPart = nil
-                            State.PB_DungeonStatusText = string.format("🚪 انتظار فتح الغرفة التالية (%s - %dم)...", tostring(mob.Name), dist)
-                            task.wait(1.2)
+                            State.PB_DungeonStatusText = string.format("🚪 الانتقال للغرفة التالية (%s - %dم)...", tostring(mob.Name), dist)
+                            task.wait(1.0)
                             refreshCharacterRefs()
-                            -- Re-evaluate target after 1.2s so if Room 2's mobs just spawned, we pick Room 2 instead of the faraway Boss!
                             mob, mobPart = findBestPBTarget(isRaid)
                             if not HumanoidRootPart or not mob or not mobPart or not mob.Parent or not isPBMobAlive(mob) then
                                 return
@@ -2965,23 +2919,19 @@ task.spawn(function()
                             hadEnt = mob:GetAttribute("hadEntrance")
                         end
 
-                        -- Locked-Mob Auto-Recovery: If a hadEntrance == false mob stays false and takes 0 damage for > 2.6s,
-                        -- it belongs to a locked future room (like the Boss Arena in Chapter 1 Room 2) -> blacklist & return to last active room!
+                        -- Locked-Mob Auto-Recovery: If a hadEntrance == false mob stays locked and takes 0 damage for > 3.5s, ignore it temporarily
                         local now = tick()
                         if State.PB_CurrentTargetModel ~= mob then
                             State.PB_CurrentTargetModel = mob
                             State.PB_CurrentTargetStartTime = now
                             State.PB_CurrentTargetStartHP = hp
-                        elseif not isRaid and hadEnt == false and (now - (State.PB_CurrentTargetStartTime or now)) >= 2.6 and hp >= (State.PB_CurrentTargetStartHP or hp) then
+                        elseif not isRaid and hadEnt == false and (now - (State.PB_CurrentTargetStartTime or now)) >= 3.5 and hp >= (State.PB_CurrentTargetStartHP or hp) then
                             State.PB_LockedMobIgnoreUntil = State.PB_LockedMobIgnoreUntil or {}
-                            State.PB_LockedMobIgnoreUntil[mob] = now + 12.0
-                            State.PB_ActiveFollowMob = nil
-                            State.PB_ActiveFollowPart = nil
+                            State.PB_LockedMobIgnoreUntil[mob] = now + 10.0
                             State.PB_CurrentTargetModel = nil
                             if State.PB_LastActiveRoomPos and HumanoidRootPart then
-                                HumanoidRootPart.CFrame = CFrame.new(State.PB_LastActiveRoomPos + Vector3.new(0, 5, 0))
+                                HumanoidRootPart.CFrame = CFrame.new(State.PB_LastActiveRoomPos + Vector3.new(0, 4, 0))
                             end
-                            checkPBDungeonRoomTransition()
                             return
                         end
 
@@ -2990,24 +2940,20 @@ task.spawn(function()
                             tostring(mob.Name), dist, hp, currentPBWeaponDamage()
                         )
 
-                        -- Korth Boss Room Entrance & BookHand Handling (thha3203 pixel-blade-v3 & thaemmayanh)
+                        -- Korth Boss Room Entrance Handling
                         if (mob.Name == "Korth" or mob.Name == "CorruptKorth") and not State.PB_EnteredKorthRoom then
-                            State.PB_ActiveFollowMob = nil
-                            State.PB_ActiveFollowPart = nil
                             HumanoidRootPart.CFrame = CFrame.new(169, 197, 7028)
                             task.wait(2.5)
                             State.PB_EnteredKorthRoom = true
                         end
 
-                        -- Atticus Vault Entrance Handling (thha3203 v2..v5 & Vortex_PixelBlade)
+                        -- Atticus Vault Entrance Handling
                         if mob.Name == "Atticus" and not State.PB_EnteredBossRoom then
                             local vault = workspace:FindFirstChild("Vault")
                             if vault then
                                 pbPositionAtTarget(mob, mobPart, true)
                                 task.wait(3.0)
                                 if HumanoidRootPart and vault.Parent then
-                                    State.PB_ActiveFollowMob = nil
-                                    State.PB_ActiveFollowPart = nil
                                     HumanoidRootPart.CFrame = CFrame.new(vault:GetPivot().Position + Vector3.new(0, 5, 0))
                                 end
                                 State.PB_EnteredBossRoom = true
@@ -3015,35 +2961,26 @@ task.spawn(function()
                             end
                         end
 
-                        -- Fly to enemy (5.2 studs behind, jumping 2.0-6.0 studs in air) & lock follow target for 60FPS Heartbeat tracking
+                        -- Position 6.5 studs behind monster & preserve vertical jump physics when close
                         pbPositionAtTarget(mob, mobPart, true)
 
-                        -- Execute Overhead Jump + Clicks + swing + onHit + Tornado stun
+                        -- Execute Real Jump + Mobile Sword Button Click (🗡️) + swing + onHit (Overhead Slash!)
                         pbDamageModel(mob, currentPBWeaponDamage())
-                        pbMassKillWithTornado(isRaid)
                     elseif Config.PB_AutoFarmDungeon then
-                        State.PB_ActiveFollowMob = nil
-                        State.PB_ActiveFollowPart = nil
                         local sinceClear = tick() - (State.PB_LastActiveRoomTime or 0)
-                        if State.PB_LastActiveRoomTime and sinceClear < 1.8 then
-                            State.PB_DungeonStatusText = "⏳ انتظار ظهور وحوش الغرفة التالية..."
+                        if not State.PB_LastActiveRoomTime or sinceClear < 4.5 then
+                            State.PB_DungeonStatusText = "⏳ انتظار فتح باب الغرفة التالية وظهور الوحوش..."
                         else
-                            State.PB_DungeonStatusText = "🏃 الغرفة نظيفة: جاري فحص نقطة الاستراحة / الغرفة التالية..."
+                            State.PB_DungeonStatusText = "🏃 فحص استراحة الغرفة الحالية..."
                             checkPBDungeonRoomTransition()
                         end
                     else
-                        State.PB_ActiveFollowMob = nil
-                        State.PB_ActiveFollowPart = nil
                         State.PB_DungeonStatusText = "⏳ في انتظار ظهور وحوش الغارة..."
                     end
                 else
-                    State.PB_ActiveFollowMob = nil
-                    State.PB_ActiveFollowPart = nil
                     State.PB_DungeonStatusText = "🎬 مشهد سينمائي (Cutscene)..."
                 end
             else
-                State.PB_ActiveFollowMob = nil
-                State.PB_ActiveFollowPart = nil
                 State.PB_DungeonStatusText = "متوقف (جاهز للتشغيل)"
             end
         end)
@@ -3703,8 +3640,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v4.2 | Pixel Blade [Overhead Jump-Click]"
-    or "⚔️ Delta Hub v4.2 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v4.3 | Pixel Blade [Zero-Lag Jump-Click]"
+    or "⚔️ Delta Hub v4.3 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -4684,4 +4621,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v4.2] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v4.3] Loaded! Active Game Detected: " .. tostring(CurrentGame))
