@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v4.6 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v4.7 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Room-Wave Anti-Boss-Jump + Overhead Jump-Click M1 v4.6)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Pure Auto-Clicker M1 + Healer/Drainer #1 Priority v4.7)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -300,6 +300,7 @@ local Config = {
     -- [Game 2] Pixel Blade Settings (World 1-5: The Sunken Depths / Arc 2 CHRONOS)
     PB_AutoFarmDungeon = true,
     PB_AutoFarmRaid = false,
+    PB_AutoClicker = true,
     PB_KillAura = true,
     PB_KillAuraRange = 100,
     PB_GodBuffAndHeal = true,
@@ -1553,6 +1554,143 @@ local function findAliveBookHand()
     return nil, nil
 end
 
+-- Zero-Lag Cached Healer / Drainer / Support Enemy Detector (#1 Top Priority in Current Room!)
+-- Detects enemies that heal other enemies or drain/siphon/leech/tether the player:
+--   1. By enemy name (Healer, Priest, Shaman, Druid, Cultist, Witch, MoonWitch, BloodDemon, Vampire, Leech, Siphon, Totem, etc.)
+--   2. By direct child weapons/items/auras (Heal, Drain, Tether, Beam, Siphon, Leech, Totem, Orb, Chalice, Staff, etc.)
+--   3. By active healing/draining Beams or Tether links inside the current room!
+local PB_HEALER_DRAINER_CACHE = setmetatable({}, { __mode = "k" })
+local PB_BEAM_SCAN_TIME_CACHE = setmetatable({}, { __mode = "k" })
+local PB_BEAM_RESULT_CACHE = setmetatable({}, { __mode = "k" })
+
+local PB_HEALER_DRAINER_NAME_KEYWORDS = {
+    -- Healers, Support & Totems
+    "heal", "healer", "mender", "restorer", "medic", "priest", "highpriest", "cleric",
+    "shaman", "druid", "monk", "oracle", "bishop", "chaplain", "support", "supporter",
+    "buffer", "channeler", "enchanter", "totem", "ward", "beacon", "pylon", "obelisk",
+    "sanctuary", "shrine", "angel", "seraph", "fairy", "pixie", "nymph", "dryad",
+    -- Drainers, Leechers, Siphoners & Blood/Soul/Tether Enemies
+    "drain", "drainer", "leech", "siphon", "siphoner", "lifesteal", "absorber",
+    "vampire", "blooddemon", "corruptblooddemon", "bloodmage", "bloodpriest", "bloodcult",
+    "bloodwitch", "blood", "witch", "moonwitch", "corruptmoonwitch", "cultist", "acolyte",
+    "ritualist", "necromancer", "lich", "warlock", "sorcerer", "hex", "hexer", "curse",
+    "eyeball", "corrupteyeball", "soul", "souleater", "wraith", "banshee", "specter",
+    "phantom", "shade", "siren", "parasite", "infestedtree", "corruptinfestedtree",
+    "mindflayer", "voidmage", "chronospriest", "sunkenpriest", "sunkenwitch", "sunkenshaman"
+}
+
+local PB_HEALER_DRAINER_CHILD_KEYWORDS = {
+    "heal", "healing", "regen", "mend", "restore", "blessing", "totem", "support",
+    "drain", "leech", "siphon", "lifesteal", "tether", "beam", "link", "chain",
+    "absorb", "curse", "hex", "weaken", "debuff", "soul", "blood", "ritual",
+    "chalice", "orb", "relic", "censer", "ankh", "tome", "grimoire"
+}
+
+-- Throttled O(1) check for active Heal/Drain Beams or Tethers on an enemy in the current room
+local function pbHasActiveHealOrDrainBeam(model)
+    if not model then return false end
+    local now = tick()
+    local lastScan = PB_BEAM_SCAN_TIME_CACHE[model] or 0
+    if (now - lastScan) < 0.45 then
+        return PB_BEAM_RESULT_CACHE[model] == true
+    end
+    PB_BEAM_SCAN_TIME_CACHE[model] = now
+
+    local hasBeam = false
+    pcall(function()
+        local function checkContainer(container)
+            if not container or hasBeam then return end
+            for _, ch in ipairs(container:GetChildren()) do
+                if ch:IsA("Beam") and ch.Enabled ~= false then
+                    hasBeam = true
+                    return
+                end
+                local cn = string.lower(ch.Name or "")
+                if string.find(cn, "heal", 1, true)
+                    or string.find(cn, "drain", 1, true)
+                    or string.find(cn, "tether", 1, true)
+                    or string.find(cn, "siphon", 1, true)
+                    or string.find(cn, "leech", 1, true)
+                    or string.find(cn, "beam", 1, true)
+                    or string.find(cn, "link", 1, true) then
+                    hasBeam = true
+                    return
+                end
+            end
+        end
+
+        checkContainer(model)
+        if not hasBeam then checkContainer(model:FindFirstChild("HumanoidRootPart")) end
+        if not hasBeam then checkContainer(model:FindFirstChild("Torso") or model:FindFirstChild("UpperTorso")) end
+        if not hasBeam then checkContainer(model:FindFirstChild("Head")) end
+        if not hasBeam then checkContainer(model:FindFirstChild("basehitbox")) end
+    end)
+
+    PB_BEAM_RESULT_CACHE[model] = hasBeam
+    if hasBeam then
+        PB_HEALER_DRAINER_CACHE[model] = true
+    end
+    return hasBeam
+end
+
+local function pbIsHealerOrDrainerEnemy(model)
+    if not model then return false end
+    if PB_BOSS_NAMES[model.Name] then
+        PB_HEALER_DRAINER_CACHE[model] = false
+        return false
+    end
+
+    if pbHasActiveHealOrDrainBeam(model) then
+        return true
+    end
+
+    local cached = PB_HEALER_DRAINER_CACHE[model]
+    if cached ~= nil then
+        return cached
+    end
+
+    local isHealerOrDrainer = false
+    pcall(function()
+        local nameLow = string.lower(model.Name or "")
+        for _, kw in ipairs(PB_HEALER_DRAINER_NAME_KEYWORDS) do
+            if string.find(nameLow, kw, 1, true) then
+                isHealerOrDrainer = true
+                return
+            end
+        end
+
+        for _, child in ipairs(model:GetChildren()) do
+            if child:IsA("Beam") then
+                isHealerOrDrainer = true
+                return
+            end
+            local cn = string.lower(child.Name or "")
+            for _, kw in ipairs(PB_HEALER_DRAINER_CHILD_KEYWORDS) do
+                if string.find(cn, kw, 1, true) then
+                    isHealerOrDrainer = true
+                    return
+                end
+            end
+            for _, sub in ipairs(child:GetChildren()) do
+                if sub:IsA("Beam") then
+                    isHealerOrDrainer = true
+                    return
+                end
+                local sn = string.lower(sub.Name or "")
+                for _, kw in ipairs(PB_HEALER_DRAINER_CHILD_KEYWORDS) do
+                    if string.find(sn, kw, 1, true) then
+                        isHealerOrDrainer = true
+                        return
+                    end
+                end
+            end
+        end
+    end)
+
+    PB_HEALER_DRAINER_CACHE[model] = isHealerOrDrainer
+    return isHealerOrDrainer
+end
+
 -- Zero-Lag Cached Ranged Enemy Detector (Bow, Crossbow, Magic, Mage, Witch, Eyeball, Cannon, Thrower, etc.)
 -- Inspects each enemy model AT MOST ONCE and caches the boolean in a weak-key table (O(1) lookup, ZERO lag!).
 -- Strictly excludes Bosses so it NEVER causes early Boss Room teleports!
@@ -1611,11 +1749,13 @@ local function pbIsRangedEnemy(model)
     return isRanged
 end
 
--- Strict Step-by-Step Room-Wave Enemy Finder (v4.6 Anti-Boss-Jump + v4.3 Locked-Mob Recovery + Active Ranged Priority):
+-- Strict Step-by-Step Room-Wave Enemy Finder (v4.6 Anti-Boss-Jump + Healer/Drainer #1 Priority + Active Ranged #2 Priority):
 -- 1. Living BookHand (Korth boss shield phase)
 -- 2. Active Enemies in CURRENT ROOM (hadEntrance == true within <= 95 studs, or active mob within <= 75 studs):
---    - Active Ranged (Bow/Archer/Mage/Witch/Eyeball/Cannon) FIRST!
---    - Active Melee SECOND!
+--    - Priority 2A: Active Healer / Drainer with active Heal/Drain Beam or Tether FIRST!
+--    - Priority 2B: Active Healer / Drainer (Priest/Shaman/Witch/Cultist/BloodDemon/Vampire/Totem/Leech/Siphon) SECOND!
+--    - Priority 2C: Active Ranged (Bow/Archer/Mage/Eyeball/Cannon) THIRD!
+--    - Priority 2D: Active Melee FOURTH!
 -- 3. ONLY when 100% of current-room enemies are dead:
 --    - Distinguishes multi-enemy Normal Room waves (neighborCount >= 1 within 75 studs) from the single isolated
 --      pre-spawned Boss sitting alone in the circular Boss Arena (neighborCount == 0 / high MaxHealth / PB_BOSS_NAMES).
@@ -1633,6 +1773,8 @@ local function findBestPBTarget(isRaid)
         return bhMob, bhPart
     end
 
+    local currentBeamMob, currentBeamPart, currentBeamDist = nil, nil, math.huge
+    local currentHealerMob, currentHealerPart, currentHealerDist = nil, nil, math.huge
     local currentRangedMob, currentRangedPart, currentRangedDist = nil, nil, math.huge
     local currentActiveMob, currentActivePart, currentActiveDist = nil, nil, math.huge
     local currentRoomMob, currentRoomPart, currentRoomDist = nil, nil, math.huge
@@ -1680,6 +1822,16 @@ local function findBestPBTarget(isRaid)
                         State.PB_LastActiveRoomPos = mobPos
                         State.PB_LastActiveRoomTime = now
 
+                        if not isBossName and pbHasActiveHealOrDrainBeam(v) and distFromMe < currentBeamDist then
+                            currentBeamDist = distFromMe
+                            currentBeamMob = v
+                            currentBeamPart = part
+                        end
+                        if not isBossName and pbIsHealerOrDrainerEnemy(v) and distFromMe < currentHealerDist then
+                            currentHealerDist = distFromMe
+                            currentHealerMob = v
+                            currentHealerPart = part
+                        end
                         if pbIsRangedEnemy(v) and not isBossName and distFromMe < currentRangedDist then
                             currentRangedDist = distFromMe
                             currentRangedMob = v
@@ -1713,7 +1865,9 @@ local function findBestPBTarget(isRaid)
         end
     end
 
-    -- 1. Always finish 100% of enemies in the CURRENT active room first (Ranged first, then Melee)!
+    -- 1. Always finish 100% of enemies in the CURRENT active room first (Healer/Drainer #1 -> Ranged #2 -> Melee #3)!
+    if currentBeamMob then return currentBeamMob, currentBeamPart end
+    if currentHealerMob then return currentHealerMob, currentHealerPart end
     if currentRangedMob then return currentRangedMob, currentRangedPart end
     if currentActiveMob then return currentActiveMob, currentActivePart end
     if currentRoomMob then return currentRoomMob, currentRoomPart end
@@ -1916,11 +2070,8 @@ local function applyPBTempBuffAndHeal(forceBuff)
     end
 end
 
--- Cached Character.localChar Native M1 Swing Trigger Collector (Runs ONCE per character spawn = ZERO lag!)
--- Extracts:
---   1. getsenv(Character.localChar) environment (weapon.abilityCooldowns & abilityCooldowns)
---   2. UserInputService.InputBegan & InputEnded connections belonging to Character.localChar
---   3. LocalPlayer:GetMouse().Button1Down & Button1Up connections
+-- Cached Character.localChar Environment & Zero-Arg Mouse Trigger Collector (Runs ONCE per character spawn = ZERO lag!)
+-- IMPORTANT: NEVER passes fake Lua tables to UserInputService.InputBegan (which crashes localChar on input.Changed:Connect and locks the pink charge ring!)
 local function pbGetLocalCharSwingTriggers()
     if not Character then return nil end
     local lc = Character:FindFirstChild("localChar")
@@ -1932,59 +2083,21 @@ local function pbGetLocalCharSwingTriggers()
 
     local triggers = {
         env = nil,
-        uisBegan = {},
-        uisEnded = {},
         mouseDown = {},
         mouseUp = {}
     }
 
     pcall(function()
-        local lcEnv = nil
         if getsenv then
             local ok, env = pcall(getsenv, lc)
             if ok and type(env) == "table" then
-                lcEnv = env
                 triggers.env = env
                 State.PB_CachedLocalCharScript = lc
                 State.PB_CachedLocalCharEnv = env
             end
         end
 
-        local function belongsToLocalChar(fn)
-            if type(fn) ~= "function" then return false end
-            if lcEnv and getfenv then
-                local ok, fenv = pcall(getfenv, fn)
-                if ok and fenv == lcEnv then
-                    return true
-                end
-            end
-            if debug and debug.info then
-                local ok, src = pcall(debug.info, fn, "s")
-                if ok and type(src) == "string" and string.find(src, "localChar", 1, true) then
-                    return true
-                end
-            end
-            return false
-        end
-
-        -- 1. Collect UserInputService.InputBegan / InputEnded connections from Character.localChar
         if getconnections then
-            pcall(function()
-                for _, c in ipairs(getconnections(UserInputService.InputBegan)) do
-                    if c.Function and belongsToLocalChar(c.Function) then
-                        table.insert(triggers.uisBegan, c.Function)
-                    end
-                end
-            end)
-            pcall(function()
-                for _, c in ipairs(getconnections(UserInputService.InputEnded)) do
-                    if c.Function and belongsToLocalChar(c.Function) then
-                        table.insert(triggers.uisEnded, c.Function)
-                    end
-                end
-            end)
-
-            -- 2. Collect LocalPlayer:GetMouse().Button1Down / Button1Up connections
             pcall(function()
                 local mouse = LocalPlayer:GetMouse()
                 if mouse then
@@ -2009,6 +2122,7 @@ local function pbGetLocalCharSwingTriggers()
 end
 
 -- Cached Mobile Sword Button (🗡️) & Jump Button (^) Finder (Scans at most once every 4.0s for ZERO lag!)
+-- IMPORTANT: NEVER climbs to primaryObj.Parent (which holds Block 🛡️ / Dash 💨 / Ability ⚡)! Only binds primaryObj and its own children!
 local function pbBuildGuiGroupAndConnections(primaryObj, vp)
     if not primaryObj then return nil end
     local group = {}
@@ -2016,6 +2130,15 @@ local function pbBuildGuiGroupAndConnections(primaryObj, vp)
 
     local function addObj(o)
         if o and o:IsA("GuiObject") and not seen[o] then
+            local nLow = string.lower(o.Name or "")
+            if string.find(nLow, "block", 1, true)
+                or string.find(nLow, "shield", 1, true)
+                or string.find(nLow, "dash", 1, true)
+                or string.find(nLow, "ability", 1, true)
+                or string.find(nLow, "skill", 1, true)
+                or string.find(nLow, "charge", 1, true) then
+                return
+            end
             seen[o] = true
             local entry = {
                 obj = o,
@@ -2023,7 +2146,7 @@ local function pbBuildGuiGroupAndConnections(primaryObj, vp)
                 conns = {}
             }
             if getconnections then
-                for _, sigName in ipairs({ "MouseButton1Down", "Activated", "MouseButton1Click", "TouchTap", "InputBegan", "InputEnded", "MouseButton1Up" }) do
+                for _, sigName in ipairs({ "MouseButton1Click", "Activated", "MouseButton1Down", "MouseButton1Up" }) do
                     pcall(function()
                         local sig = o[sigName]
                         if sig then
@@ -2041,19 +2164,9 @@ local function pbBuildGuiGroupAndConnections(primaryObj, vp)
 
     addObj(primaryObj)
     pcall(function()
-        local p = primaryObj.Parent
-        if p and p:IsA("GuiObject") and p.AbsoluteSize.X <= vp.X * 0.28 and p.AbsoluteSize.Y <= vp.Y * 0.38 then
-            addObj(p)
-            for _, ch in ipairs(p:GetDescendants()) do
-                if ch:IsA("GuiObject") then
-                    addObj(ch)
-                end
-            end
-        else
-            for _, ch in ipairs(primaryObj:GetDescendants()) do
-                if ch:IsA("GuiObject") then
-                    addObj(ch)
-                end
+        for _, ch in ipairs(primaryObj:GetDescendants()) do
+            if ch:IsA("GuiObject") then
+                addObj(ch)
             end
         end
     end)
@@ -2173,8 +2286,7 @@ local function pbGetMobileCombatButtons()
     return swordBtn, jumpBtn, State.PB_CachedSwordGroup, State.PB_CachedJumpGroup
 end
 
--- Fires complete Press + Release cycle on Mobile GuiButton signals & cached getconnections
--- IMPORTANT: Always fires MouseButton1Up & InputEnded 0.025s after Down/Begin so the Sword Button (🗡️) NEVER gets stuck held down!
+-- Instant Zero-Hold Auto-Clicker Tap on a Mobile GuiButton (NEVER passes fake tables to InputBegan so the button NEVER sticks in charge mode!)
 local function pbTriggerGuiGroup(btn, group)
     if not btn then return end
     pcall(function()
@@ -2182,47 +2294,16 @@ local function pbTriggerGuiGroup(btn, group)
         local sz = btn.AbsoluteSize
         local sx = math.floor(pos.X + sz.X * 0.5)
         local sy = math.floor(pos.Y + sz.Y * 0.5)
-        local vec3Pos = Vector3.new(sx, sy, 0)
-        local touchPositions = { Vector2.new(sx, sy) }
-
-        local mockTouchBegin = {
-            UserInputType = Enum.UserInputType.Touch,
-            UserInputState = Enum.UserInputState.Begin,
-            KeyCode = Enum.KeyCode.Unknown,
-            Position = vec3Pos,
-            Delta = Vector3.zero
-        }
-        local mockTouchEnd = {
-            UserInputType = Enum.UserInputType.Touch,
-            UserInputState = Enum.UserInputState.End,
-            KeyCode = Enum.KeyCode.Unknown,
-            Position = vec3Pos,
-            Delta = Vector3.zero
-        }
-        local mockMouseBegin = {
-            UserInputType = Enum.UserInputType.MouseButton1,
-            UserInputState = Enum.UserInputState.Begin,
-            KeyCode = Enum.KeyCode.Unknown,
-            Position = vec3Pos,
-            Delta = Vector3.zero
-        }
-        local mockMouseEnd = {
-            UserInputType = Enum.UserInputType.MouseButton1,
-            UserInputState = Enum.UserInputState.End,
-            KeyCode = Enum.KeyCode.Unknown,
-            Position = vec3Pos,
-            Delta = Vector3.zero
-        }
 
         local entries = group or { { obj = btn, isButton = btn:IsA("GuiButton"), conns = {} } }
         for _, entry in ipairs(entries) do
             local o = entry.obj
-            if o and o.Parent then
-                if entry.isButton and firesignal then
+            if o and o.Parent and entry.isButton then
+                if firesignal then
                     pcall(firesignal, o.MouseButton1Down, sx, sy)
-                    pcall(firesignal, o.Activated)
+                    pcall(firesignal, o.MouseButton1Up, sx, sy)
                     pcall(firesignal, o.MouseButton1Click)
-                    pcall(firesignal, o.TouchTap, touchPositions)
+                    pcall(firesignal, o.Activated)
                 end
 
                 local conns = entry.conns
@@ -2232,9 +2313,9 @@ local function pbTriggerGuiGroup(btn, group)
                             if c.Function then pcall(c.Function, sx, sy) elseif c.Fire then pcall(function() c:Fire(sx, sy) end) end
                         end
                     end
-                    if conns.Activated then
-                        for _, c in ipairs(conns.Activated) do
-                            if c.Function then pcall(c.Function, mockTouchBegin, 1) elseif c.Fire then pcall(function() c:Fire(mockTouchBegin, 1) end) end
+                    if conns.MouseButton1Up then
+                        for _, c in ipairs(conns.MouseButton1Up) do
+                            if c.Function then pcall(c.Function, sx, sy) elseif c.Fire then pcall(function() c:Fire(sx, sy) end) end
                         end
                     end
                     if conns.MouseButton1Click then
@@ -2242,66 +2323,20 @@ local function pbTriggerGuiGroup(btn, group)
                             if c.Function then pcall(c.Function) elseif c.Fire then pcall(function() c:Fire() end) end
                         end
                     end
-                    if conns.TouchTap then
-                        for _, c in ipairs(conns.TouchTap) do
-                            if c.Function then pcall(c.Function, touchPositions) elseif c.Fire then pcall(function() c:Fire(touchPositions) end) end
-                        end
-                    end
-                    if conns.InputBegan then
-                        for _, c in ipairs(conns.InputBegan) do
-                            if c.Function then
-                                pcall(c.Function, mockTouchBegin, false)
-                            elseif c.Fire then
-                                pcall(function() c:Fire(mockTouchBegin, false) end)
-                            end
-                        end
-                    end
                 end
             end
         end
-
-        -- Release button 0.025s later so the Mobile Sword Button (🗡️) completes its click and NEVER stays stuck in the red charging ring!
-        task.delay(0.025, function()
-            pcall(function()
-                for _, entry in ipairs(entries) do
-                    local o = entry.obj
-                    if o and o.Parent then
-                        if entry.isButton and firesignal then
-                            pcall(firesignal, o.MouseButton1Up, sx, sy)
-                        end
-                        local conns = entry.conns
-                        if conns then
-                            if conns.MouseButton1Up then
-                                for _, c in ipairs(conns.MouseButton1Up) do
-                                    if c.Function then pcall(c.Function, sx, sy) elseif c.Fire then pcall(function() c:Fire(sx, sy) end) end
-                                end
-                            end
-                            if conns.InputEnded then
-                                for _, c in ipairs(conns.InputEnded) do
-                                    if c.Function then
-                                        pcall(c.Function, mockTouchEnd, false)
-                                        pcall(c.Function, mockMouseEnd, false)
-                                    elseif c.Fire then
-                                        pcall(function() c:Fire(mockTouchEnd, false) end)
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end)
-        end)
     end)
 end
 
--- Overhead Jump + Continuous Non-Stop Click Attack Engine (Works on Android Mobile & PC with ZERO lag!):
--- 1. Triggers real physical Roblox Jump (Humanoid.Jump = true + Jumping State) for the "Overhead" Sword Upgrade!
--- 2. Clears weapon.abilityCooldowns booleans in getsenv(Character.localChar) (exact TexRBLX/final.lua method!)
--- 3. Taps & cleanly releases the Mobile Sword Button (🗡️) & Jump Button (^) via cached connections + firesignal!
--- 4. Sends VirtualInputManager:SendMouseButtonEvent at (0, 0) (thha3203 M1), (500, 500) (TexRBLX M1), and Sword Button center!
+-- Pure High-Speed Auto-Clicker Engine (أوتو كليكر نقي وسريع للضرب المستمر + Overhead Jump):
+-- 1. Instant 0-delay click via VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true/false, game, 0) (exact thha3203 M1 Auto-Clicker!)
+-- 2. Native Roblox Controller Click via VirtualUser:CaptureController() + VirtualUser:ClickButton1(Vector2.new(0, 0))
+-- 3. Instant Mobile Sword Button (🗡️) tap at (sx, syInset) + MouseButton1Click (ZERO fake InputBegan tables so it NEVER sticks in pink charge ring!)
+-- 4. Clears weapon cooldowns & stuck charge/block flags in getsenv(Character.localChar) + fires remotes.swing:FireServer()
 local function pbPerformRealM1Attack()
     local now = tick()
-    if (now - (State.PB_LastM1Time or 0)) < 0.14 then return end
+    if (now - (State.PB_LastM1Time or 0)) < 0.08 then return end
     State.PB_LastM1Time = now
 
     pcall(function()
@@ -2316,136 +2351,106 @@ local function pbPerformRealM1Attack()
             end
         end
 
-        -- 2. Reset weapon cooldowns in getsenv(Character.localChar) & fire native UIS/Mouse M1 triggers
+        -- 2. Reset weapon cooldowns & any stuck charge/block/debounce flags in getsenv(Character.localChar)
         local triggers = pbGetLocalCharSwingTriggers()
-        local mockM1Begin = {
-            UserInputType = Enum.UserInputType.MouseButton1,
-            UserInputState = Enum.UserInputState.Begin,
-            KeyCode = Enum.KeyCode.Unknown,
-            Position = Vector3.zero,
-            Delta = Vector3.zero
-        }
-        local mockM1End = {
-            UserInputType = Enum.UserInputType.MouseButton1,
-            UserInputState = Enum.UserInputState.End,
-            KeyCode = Enum.KeyCode.Unknown,
-            Position = Vector3.zero,
-            Delta = Vector3.zero
-        }
-
         if triggers then
-            if triggers.env then
-                if type(triggers.env.abilityCooldowns) == "table" then
-                    for k, v in pairs(triggers.env.abilityCooldowns) do
+            local env = triggers.env
+            if type(env) == "table" then
+                if type(env.abilityCooldowns) == "table" then
+                    for k, v in pairs(env.abilityCooldowns) do
                         if type(v) == "number" then
-                            triggers.env.abilityCooldowns[k] = 0
+                            env.abilityCooldowns[k] = 0
                         elseif v == true then
-                            triggers.env.abilityCooldowns[k] = false
+                            env.abilityCooldowns[k] = false
                         end
                     end
                 end
-                if type(triggers.env.weapon) == "table" then
-                    if type(triggers.env.weapon.abilityCooldowns) == "table" then
-                        for k, v in pairs(triggers.env.weapon.abilityCooldowns) do
+                for k, v in pairs(env) do
+                    local kl = type(k) == "string" and string.lower(k) or ""
+                    if v == true and (kl == "blocking" or kl == "isblocking" or kl == "charging" or kl == "ischarging" or kl == "holding" or kl == "swingcd" or kl == "attackcd" or kl == "debounce") then
+                        env[k] = false
+                    end
+                end
+                if type(env.weapon) == "table" then
+                    if type(env.weapon.abilityCooldowns) == "table" then
+                        for k, v in pairs(env.weapon.abilityCooldowns) do
                             if v == true then
-                                triggers.env.weapon.abilityCooldowns[k] = false
+                                env.weapon.abilityCooldowns[k] = false
                             elseif type(v) == "number" then
-                                triggers.env.weapon.abilityCooldowns[k] = 0
+                                env.weapon.abilityCooldowns[k] = 0
                             end
                         end
                     end
-                    for k, v in pairs(triggers.env.weapon) do
+                    for k, v in pairs(env.weapon) do
                         local kl = type(k) == "string" and string.lower(k) or ""
-                        if type(v) == "boolean" and (kl == "cd" or kl == "cooldown" or kl == "attackcd" or kl == "swingcd" or kl == "debounce") then
-                            triggers.env.weapon[k] = false
+                        if v == true and (kl == "cd" or kl == "cooldown" or kl == "attackcd" or kl == "swingcd" or kl == "debounce" or kl == "charging" or kl == "holding" or kl == "blocking") then
+                            env.weapon[k] = false
                         elseif type(v) == "number" and (kl == "cd" or kl == "cooldown" or kl == "attackcd" or kl == "swingcd") then
-                            triggers.env.weapon[k] = 0
+                            env.weapon[k] = 0
                         end
                     end
                 end
             end
 
-            for _, fn in ipairs(triggers.uisBegan) do
-                task.spawn(pcall, fn, mockM1Begin, false)
-            end
             for _, fn in ipairs(triggers.mouseDown) do
-                task.spawn(pcall, fn)
+                pcall(fn)
+            end
+            for _, fn in ipairs(triggers.mouseUp) do
+                pcall(fn)
             end
         end
 
-        -- 3. Find & Tap Mobile Sword Button (🗡️) + Mobile Jump Button (^) with automatic 0.025s release!
-        local swordBtn, jumpBtn, swordGroup, jumpGroup = pbGetMobileCombatButtons()
-        if jumpBtn then
-            pbTriggerGuiGroup(jumpBtn, jumpGroup)
-        end
-        if swordBtn then
-            pbTriggerGuiGroup(swordBtn, swordGroup)
-        end
-
-        -- 4. VirtualInputManager M1 Click at (0, 0) (thha3203 M1), (500, 500) (TexRBLX M1), and Sword Button center
+        -- 3. Pure Auto-Clicker Click #1: VirtualInputManager Instant 0-Delay Tap at (0, 0) (never hits GUI, never triggers heavy charge!)
         if VirtualInputManager then
             VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
             VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
         end
-        if not State.PB_M1ClickInFlight then
-            State.PB_M1ClickInFlight = true
-            task.spawn(function()
-                pcall(function()
-                    local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
-                    local inset = GuiService:GetGuiInset()
-                    local sx, syInset
 
-                    if swordBtn and swordBtn.Parent then
-                        local pos = swordBtn.AbsolutePosition
-                        local sz = swordBtn.AbsoluteSize
-                        sx = math.floor(pos.X + sz.X * 0.5)
-                        syInset = math.floor(pos.Y + sz.Y * 0.5 + inset.Y)
-                    else
-                        sx = math.floor(vp.X * 0.785)
-                        syInset = math.floor(vp.Y * 0.705 + inset.Y)
-                    end
-
-                    if VirtualInputManager then
-                        VirtualInputManager:SendMouseButtonEvent(500, 500, 0, true, game, 1)
-                        VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, true, game, 1)
-                    end
-                    if mouse1press then pcall(mouse1press) end
-
-                    task.wait(0.025)
-
-                    if VirtualInputManager then
-                        VirtualInputManager:SendMouseButtonEvent(500, 500, 0, false, game, 1)
-                        VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, false, game, 1)
-                    end
-                    if mouse1release then pcall(mouse1release) end
-
-                    if triggers then
-                        for _, fn in ipairs(triggers.uisEnded) do
-                            pcall(fn, mockM1End, false)
-                        end
-                        for _, fn in ipairs(triggers.mouseUp) do
-                            pcall(fn)
-                        end
-                    end
-                end)
-                State.PB_M1ClickInFlight = false
+        -- 4. Pure Auto-Clicker Click #2: VirtualUser Hardware Controller Click
+        if VirtualUser then
+            pcall(function()
+                VirtualUser:CaptureController()
+                VirtualUser:ClickButton1(Vector2.new(0, 0))
             end)
         end
 
-        -- 5. Activate Tool & Delta mouse1click
+        -- 5. Pure Auto-Clicker Click #3: Mobile Sword Button (🗡️) Instant Tap
+        local swordBtn, jumpBtn, swordGroup, jumpGroup = pbGetMobileCombatButtons()
+        if jumpBtn then
+            pbTriggerGuiGroup(jumpBtn, jumpGroup)
+        end
+        if swordBtn and swordBtn.Parent then
+            pbTriggerGuiGroup(swordBtn, swordGroup)
+            if VirtualInputManager then
+                local inset = GuiService:GetGuiInset()
+                local pos = swordBtn.AbsolutePosition
+                local sz = swordBtn.AbsoluteSize
+                local sx = math.floor(pos.X + sz.X * 0.5)
+                local syInset = math.floor(pos.Y + sz.Y * 0.5 + inset.Y)
+                VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, true, game, 0)
+                VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, false, game, 0)
+            end
+        end
+
+        -- 6. Pure Auto-Clicker Click #4: Delta mouse1click + Tool:Activate() + remotes.swing
+        if mouse1click then
+            pcall(mouse1click)
+        end
         if Character then
             local tool = Character:FindFirstChildOfClass("Tool")
             if tool then
                 pcall(function() tool:Activate() end)
             end
         end
-        if mouse1click then
-            pcall(mouse1click)
+        local pbRemotes = getPBRemotes()
+        local swing = pbRemotes and pbRemotes:FindFirstChild("swing")
+        if swing then
+            swing:FireServer()
         end
     end)
 end
 
--- Zero-Lag Overhead Jump-Click + Stun Damage Engine (Jump + Mobile/PC Sword Click + swing + onHit + TexRBLX abilityHit without tornado lag!)
+-- Zero-Lag Auto-Clicker + Priority Healer/Drainer Burst Damage Engine
 local function pbDamageModel(v, wpnDmg)
     if not v or not v:IsA("Model") or not v.Parent then return end
     local pbRemotes = getPBRemotes()
@@ -2458,6 +2463,7 @@ local function pbDamageModel(v, wpnDmg)
 
     local worldType = workspace:FindFirstChild("worldType")
     local isAncientSands = worldType and worldType.Value == "AncientSands"
+    local dmgVal = wpnDmg or currentPBWeaponDamage()
 
     local hum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
     local targetObj = (isAncientSands and v:FindFirstChild("worm")) or v:FindFirstChild("worm") or hum
@@ -2466,23 +2472,49 @@ local function pbDamageModel(v, wpnDmg)
     end
 
     pcall(function()
-        -- 1. Execute Real Jump + Non-Stop M1 Sword Click (Overhead Slash!)
+        -- 1. Execute Pure Auto-Clicker Pulse (Jump + M1 Click + swing)
         pbPerformRealM1Attack()
 
-        -- 2. Server Swing + Direct Weapon Hit (exact v3.8 / thha3203 / Fog1ch order!)
+        -- 2. Server Swing + Direct Weapon Hit on primary target
         if swing then
             swing:FireServer()
         end
         if onHit and targetObj then
             onHit:FireServer(targetObj, 9999999999, {}, 0)
-            onHit:FireServer(targetObj, wpnDmg or currentPBWeaponDamage(), {}, 0)
+            onHit:FireServer(targetObj, dmgVal, {}, 0)
         end
-        -- 3. Zero-Lag Stun + Instant Damage (exact TexRBLX/final.lua offset 8050: abilityHit WITHOUT useAbility("tornado") so 0 particle lag!)
+        -- 3. Zero-Lag Stun + Instant Damage on primary target (abilityHit WITHOUT useAbility("tornado") so 0 lag!)
         if abilityHit and hum and hum.Health > 0 then
-            abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 1 } })
+            abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 2 } })
         end
         if useAbility and (v.Name == "Maneater" or v:FindFirstChild("worm")) then
             useAbility:FireServer("lunarSpell")
+        end
+
+        -- 4. Simultaneously stun & burst-damage ANY active Healer/Drainer in the current room (<= 85 studs, hadEntrance == true)
+        --    so they can NEVER finish healing other enemies or draining the player!
+        if HumanoidRootPart and State.PB_CachedModels then
+            local myPos = HumanoidRootPart.Position
+            local extraHits = 0
+            for _, other in ipairs(State.PB_CachedModels) do
+                if other and other ~= v and other.Parent and other:GetAttribute("hadEntrance") == true and isPBMobAlive(other) and pbIsHealerOrDrainerEnemy(other) then
+                    local oPart = getPBMobRootPart(other)
+                    if oPart and (oPart.Position - myPos).Magnitude <= 85 then
+                        local oHum = other:FindFirstChildOfClass("Humanoid") or other:FindFirstChild("Humanoid")
+                        if oHum and oHum.Health > 0 then
+                            if onHit then
+                                onHit:FireServer(oHum, 9999999999, {}, 0)
+                                onHit:FireServer(oHum, dmgVal, {}, 0)
+                            end
+                            if abilityHit then
+                                abilityHit:FireServer(oHum, math.huge, { ["stun"] = { ["dur"] = 2 } })
+                            end
+                            extraHits = extraHits + 1
+                            if extraHits >= 3 then break end
+                        end
+                    end
+                end
+            end
         end
     end)
 end
@@ -3506,10 +3538,12 @@ task.spawn(function()
                             end
                         end
 
-                        local isRangedTarget = pbIsRangedEnemy(mob)
+                        local isHealerTarget = pbIsHealerOrDrainerEnemy(mob)
+                        local isRangedTarget = not isHealerTarget and pbIsRangedEnemy(mob)
+                        local priorityTag = isHealerTarget and "💉 [معالج/مستنزف]" or (isRangedTarget and "🏹 [بعيد المدى]" or "⚔️")
                         State.PB_DungeonStatusText = string.format(
                             "%s يهاجم: %s | المسافة: %d | HP: %d | سلاحك: %d",
-                            isRangedTarget and "🏹 [بعيد المدى]" or "⚔️",
+                            priorityTag,
                             tostring(mob.Name), dist, hp, currentPBWeaponDamage()
                         )
 
@@ -3537,7 +3571,7 @@ task.spawn(function()
                         -- Position 5.5 studs behind monster with Overhead Jump Arc
                         pbPositionAtTarget(mob, mobPart, true)
 
-                        -- Execute Real Jump + Mobile Sword Button Click (🗡️) + swing + onHit + abilityHit (Overhead Slash!)
+                        -- Execute Pure Auto-Clicker + swing + onHit + abilityHit + Healer/Drainer Stun!
                         pbDamageModel(mob, currentPBWeaponDamage())
                     elseif Config.PB_AutoFarmDungeon then
                         State.PB_ActiveFollowMob = nil
@@ -3565,6 +3599,26 @@ task.spawn(function()
                 State.PB_DungeonStatusText = "متوقف (جاهز للتشغيل)"
             end
         end)
+    end
+end)
+
+-- 2G. Dedicated Pixel Blade Pure Fast Auto-Clicker M1 Loop (أوتو كليكر سريع للضرب المستمر بدون أي لاق!)
+task.spawn(function()
+    while State.Running do
+        task.wait(0.09)
+        if Config.PB_AutoClicker or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid then
+            pcall(function()
+                local cutscene = workspace:FindFirstChild("inCutscene")
+                if cutscene and cutscene.Value == true then return end
+
+                local activeMob = State.PB_ActiveFollowMob
+                if activeMob and activeMob.Parent and isPBMobAlive(activeMob) then
+                    pbPerformRealM1Attack()
+                elseif Config.PB_AutoClicker and not (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) then
+                    pbPerformRealM1Attack()
+                end
+            end)
+        end
     end
 end)
 
@@ -4221,8 +4275,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v4.6 | Pixel Blade [Overhead Jump-Click + Room-Wave Anti-Boss]"
-    or "⚔️ Delta Hub v4.6 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v4.7 | Pixel Blade [Auto-Clicker M1 + Healer/Drainer #1]"
+    or "⚔️ Delta Hub v4.7 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -4591,7 +4645,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v4.6 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v4.7 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -4634,6 +4688,10 @@ if CurrentGame == "PixelBlade" then
         else
             applyPBTempBuffAndHeal(true)
         end
+    end)
+
+    addToggle(TabPBFarm, "أوتو كليكر سريع للضرب المستمر (Fast Auto-Clicker M1)", Config.PB_AutoClicker, function(val)
+        Config.PB_AutoClicker = val
     end)
 
     addToggle(TabPBFarm, "فارم الغارات التلقائي (Auto Farm Raids)", Config.PB_AutoFarmRaid, function(val)
@@ -5202,4 +5260,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v4.6] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v4.7] Loaded! Active Game Detected: " .. tostring(CurrentGame))
