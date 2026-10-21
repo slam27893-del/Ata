@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v5.3 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v5.4 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield v5.3)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v5.4)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -306,6 +306,7 @@ local Config = {
     PB_GodBuffAndHeal = true,
     PB_PlayerProtection = true,
     PB_AutoBreakables = true,
+    PB_BreakBossPillars = true,
     PB_BringMobs = true,
     PB_ExpandHitbox = true,
     PB_HitboxSize = 45,
@@ -1548,6 +1549,133 @@ end
 -- Strict Enemy Check (Exact v4.0 + thha3203 v3/v5 & thaemmayanh):
 -- In Dungeons (isRaid == false, allowNearbyNoAttribute == false), ONLY targets models with hadEntrance ~= nil (or BookHand / worm)
 -- so the player NEVER teleports to decorative NPCs, rigs, or Boss Arena models!
+--//===========================================================================
+--// 🏛️ v5.4 W5 BOSS-2 PILLAR PHASE (هدم العواميد أولاً!)
+--// The World 5 (Sunken Depths) dungeon Boss 2 is INVULNERABLE until the player destroys
+--// the arena pillars/columns. These helpers detect pillar-like breakables, walk the player
+--// to each one, and destroy it (remote hit + real sword swings), then resume boss killing.
+--//===========================================================================
+local PB_PILLAR_NAME_HINTS = { "pillar", "collumn", "column", "obelisk", "totem", "statue", "monolith", "monument", "idol", "shrine", "crystal", "pedestal" }
+
+local function isPBPillarModel(v)
+    if not v or not v:IsA("Model") then return false end
+    if isPBPlayerModel(v) then return false end
+    local matched = false
+    local low = string.lower(v.Name)
+    for _, kw in ipairs(PB_PILLAR_NAME_HINTS) do
+        if string.find(low, kw, 1, true) then
+            matched = true
+            break
+        end
+    end
+    if not matched then
+        for _, ch in ipairs(v:GetChildren()) do
+            if ch:IsA("BasePart") or ch:IsA("Model") then
+                local cl = string.lower(ch.Name)
+                for _, kw in ipairs(PB_PILLAR_NAME_HINTS) do
+                    if string.find(cl, kw, 1, true) then
+                        matched = true
+                        break
+                    end
+                end
+                if matched then
+                    break
+                end
+            end
+        end
+    end
+    if not matched then return false end
+    -- Alive check: Humanoid HP, Health value, or (carrier-less) big solid prop
+    local hum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
+    if hum then
+        return hum.Health > 0
+    end
+    local hpVal = v:FindFirstChild("Health")
+    if hpVal and (hpVal:IsA("NumberValue") or hpVal:IsA("IntValue")) then
+        return (tonumber(hpVal.Value) or 0) > 0
+    end
+    local part = getPBMobTargetPart(v)
+    return (part ~= nil and part.Size.Magnitude >= 9) or false
+end
+
+local function findNearestPBPillar()
+    if not State.PB_PropBlacklist then
+        State.PB_PropBlacklist = setmetatable({}, { __mode = "k" })
+    end
+    refreshCharacterRefs()
+    if not HumanoidRootPart then return nil, nil end
+    local myPos = HumanoidRootPart.Position
+    local best, bestPart, bestDist = nil, nil, 260
+
+    local function try(v)
+        if v and v.Parent and v:IsA("Model") and not State.PB_PropBlacklist[v] and isPBPillarModel(v) then
+            local part = getPBMobTargetPart(v)
+            if part then
+                local d = (part.Position - myPos).Magnitude
+                if d < bestDist then
+                    best, bestPart, bestDist = v, part, d
+                end
+            end
+        end
+    end
+
+    for _, v in ipairs(workspace:GetChildren()) do
+        try(v)
+    end
+    -- Pillars are frequently CHILDREN of the room models -> also scan inside BossRoom/Vault/numbered rooms
+    for _, roomName in ipairs({ "BossRoom", "Vault", "1", "2", "3", "4", "5", "6", "7", "8", "9", "20" }) do
+        local room = workspace:FindFirstChild(roomName)
+        if room and room:IsA("Model") then
+            local ok, rpos = pcall(function() return room:GetPivot().Position end)
+            if ok and rpos and (rpos - myPos).Magnitude <= 320 then
+                for _, ch in ipairs(room:GetChildren()) do
+                    try(ch)
+                end
+            end
+        end
+    end
+    return best, bestPart
+end
+
+local function pbHitPillarModel(v)
+    local pbRemotes = getPBRemotes()
+    if not pbRemotes then return false end
+    local onHit = pbRemotes:FindFirstChild("onHit")
+    if not onHit then return false end
+    local hum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
+    local hpVal = v:FindFirstChild("Health")
+    local target = hum
+    if not target and hpVal and (hpVal:IsA("NumberValue") or hpVal:IsA("IntValue")) then
+        target = hpVal
+    end
+    if not target then
+        target = v:FindFirstChild("basehitbox") or getPBMobTargetPart(v)
+    end
+    if not target then return false end
+
+    if not State.PB_PillarPrevHP then
+        State.PB_PillarPrevHP = setmetatable({}, { __mode = "k" })
+    end
+    local prev = State.PB_PillarPrevHP[v]
+    local cur = getPBMobCurrentHP(v)
+    State.PB_PillarPrevHP[v] = cur
+    local dmg = currentPBWeaponDamage()
+
+    pcall(function()
+        if prev and cur < prev then
+            -- Pillar already cracking -> finish it instantly (exact Mana-scripts crate pattern)
+            onHit:FireServer(target, -math.huge, {}, 0)
+            if hum and hum ~= target then
+                onHit:FireServer(hum, -math.huge, {}, 0)
+            end
+        else
+            onHit:FireServer(target, 9999999999, {}, 0)
+            onHit:FireServer(target, dmg, {}, 0)
+        end
+    end)
+    return true
+end
+
 local function isPBTrueEnemy(mob, isRaid, allowNearbyNoAttribute)
     if not mob or not mob:IsA("Model") then return false end
     if isPBChestModel(mob) or isPBBreakableModel(mob) or isPBIgnoredModel(mob) then return false end
@@ -1800,6 +1928,16 @@ local function findBestPBTarget(isRaid)
         return bhMob, bhPart
     end
 
+    -- 1.5 v5.4 W5 Boss-2 PILLAR PHASE: while the boss is taking ZERO damage (invulnerable until pillars are broken!),
+    -- walk to and destroy every pillar/column in the arena first. The boss is re-attacked automatically
+    -- as soon as its HP starts dropping (all pillars destroyed).
+    if Config.PB_BreakBossPillars and not isRaid and State.PB_BossStuckSince then
+        local pil, pilPart = findNearestPBPillar()
+        if pil and pilPart then
+            return pil, pilPart
+        end
+    end
+
     local currentBeamMob, currentBeamPart, currentBeamDist = nil, nil, math.huge
     local currentHealerMob, currentHealerPart, currentHealerDist = nil, nil, math.huge
     local currentRangedMob, currentRangedPart, currentRangedDist = nil, nil, math.huge
@@ -2026,12 +2164,14 @@ local function pbBreakAllBreakablesRemotely()
     local count = 0
 
     for _, v in ipairs(allModels) do
-        if v and v.Parent and isPBBreakableModel(v) then
+        -- v5.4: also auto-smash W5 boss pillars while grinding rooms
+        local pilMatch = Config.PB_BreakBossPillars and isPBPillarModel(v)
+        if v and v.Parent and (isPBBreakableModel(v) or pilMatch) then
             local hum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
             if hum and hum.Health > 0 then
                 local part = v:FindFirstChildOfClass("Part") or v:FindFirstChildOfClass("MeshPart") or getPBMobTargetPart(v)
                 local dist = (myPos and part) and (part.Position - myPos).Magnitude or 0
-                if dist <= 120 then
+                if dist <= (pilMatch and 220 or 120) then
                     local prevHP = State.PB_BreakablePrevHP[hum]
                     local curHP = hum.Health
                     State.PB_BreakablePrevHP[hum] = curHP
@@ -3569,6 +3709,38 @@ task.spawn(function()
                             hadEnt = mob:GetAttribute("hadEntrance")
                         end
 
+                        -- v5.4: W5 Boss-2 invulnerability detector + pillar target classification.
+                        -- If the targeted real boss takes ZERO damage for >= 3s, activate the PILLAR PHASE; findBestPBTarget
+                        -- then redirects the player to break the arena pillars (the boss only unlocks after they are destroyed).
+                        local mobIsPillar = Config.PB_BreakBossPillars and not isRaid and isPBPillarModel(mob)
+                        if Config.PB_BreakBossPillars and not isRaid and (mobIsPillar or PB_BOSS_NAMES[mob.Name] == true or hadEnt == true) then
+                            if State.PB_BossWatchMob ~= mob or not State.PB_BossWatchTick then
+                                State.PB_BossWatchMob = mob
+                                State.PB_BossWatchTick = tick()
+                                State.PB_BossWatchHP = hp
+                            elseif hp < (State.PB_BossWatchHP or hp) - 0.5 then
+                                -- Boss is taking damage now -> pillars destroyed -> leave the pillar phase!
+                                State.PB_BossWatchHP = hp
+                                State.PB_BossWatchTick = tick()
+                                State.PB_BossStuckSince = nil
+                            elseif (tick() - State.PB_BossWatchTick) >= 3.0 then
+                                State.PB_BossWatchTick = tick()
+                                State.PB_BossWatchHP = hp
+                                if not State.PB_BossStuckSince then
+                                    State.PB_BossStuckSince = tick()
+                                    State.PB_DungeonStatusText = "🏛️ الزعيم محصّن! جاري هدم العواميد لفتحه..."
+                                elseif not findNearestPBPillar() then
+                                    -- Phase armed but no breakable pillar remains -> resume boss attacking (retry scan shortly)
+                                    State.PB_BossStuckSince = nil
+                                    State.PB_PropBlacklist = nil
+                                end
+                            end
+                        end
+                        if (not mobIsPillar) and (PB_BOSS_NAMES[mob.Name] ~= true) and hadEnt ~= true and State.PB_BossStuckSince and (tick() - State.PB_BossStuckSince) >= 20 then
+                            State.PB_BossStuckSince = nil
+                            State.PB_BossWatchMob = nil
+                        end
+
                         -- Exact Proven v4.6 Room-Lock Auto-Recovery + v5.3 Stubborn Phantom-Mob Blacklist:
                         -- If the targeted mob takes 0 damage for >= 2.5s while its room is not opened (hadEntrance ~= true),
                         -- ignore the WHOLE locked room cluster (mobs within 55 studs) for 45s and move to the next room.
@@ -3580,10 +3752,21 @@ task.spawn(function()
                             State.PB_TrackingMobStartTick = tick()
                             State.PB_TrackingMobStartHP = hp
                         else
+                            local mobStallSecs = tick() - (State.PB_TrackingMobStartTick or tick())
                             if hp < (State.PB_TrackingMobStartHP or hp) then
                                 State.PB_TrackingMobStartTick = tick()
                                 State.PB_TrackingMobStartHP = hp
-                            elseif not isRaid and hadEnt ~= true and (tick() - (State.PB_TrackingMobStartTick or tick())) >= 2.5 then
+                            elseif mobIsPillar and mobStallSecs >= 4.0 then
+                                -- Indestructible decorative prop (statue with no health) -> skip it, try the NEXT pillar
+                                if not State.PB_PropBlacklist then
+                                    State.PB_PropBlacklist = setmetatable({}, { __mode = "k" })
+                                end
+                                State.PB_PropBlacklist[mob] = true
+                                State.PB_TrackingMob = nil
+                                State.PB_BossStuckSince = tick()
+                                State.PB_DungeonStatusText = "🏛️ هدف غير قابل للكسر — البحث عن العمود التالي..."
+                                return
+                            elseif not isRaid and not mobIsPillar and hadEnt ~= true and mobStallSecs >= 2.5 then
                                 State.PB_LockedMobIgnoreUntil = State.PB_LockedMobIgnoreUntil or {}
                                 local expireAt = tick() + 45.0
                                 State.PB_LockedMobIgnoreUntil[mob] = expireAt
@@ -3652,16 +3835,21 @@ task.spawn(function()
                             end
                         end
 
-                        -- Position safely behind monster (stops overwriting CFrame once in range so Auto-Clicker swings freely!)
+                        -- Position safely behind monster/pillar (stops overwriting CFrame once in range so Auto-Clicker swings freely!)
                         pbPositionAtTarget(mob, mobPart, true)
 
-                        -- Gather all other active room enemies right onto the primary target spot so they are hit together!
-                        if Config.PB_BringMobs then
-                            pbBringAndExpandTargets()
-                        end
+                        if mobIsPillar then
+                            -- v5.4 W5 Pillar phase: smash the pillar via remote hit + the real Auto-Clicker sword swings!
+                            pbHitPillarModel(mob)
+                        else
+                            -- Gather all other active room enemies right onto the primary target spot so they are hit together!
+                            if Config.PB_BringMobs then
+                                pbBringAndExpandTargets()
+                            end
 
-                        -- Execute backup remote damage + 999s Stun (while Loop 2G clicks the Sword Button non-stop!)
-                        pbDamageModel(mob, currentPBWeaponDamage())
+                            -- Execute backup remote damage + 999s Stun (while Loop 2G clicks the Sword Button non-stop!)
+                            pbDamageModel(mob, currentPBWeaponDamage())
+                        end
                     elseif Config.PB_AutoFarmDungeon then
                         State.PB_ActiveFollowMob = nil
                         State.PB_ActiveFollowPart = nil
@@ -4566,8 +4754,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v5.3 | Pixel Blade [Auto Replay + Monster Shield]"
-    or "⚔️ Delta Hub v5.3 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v5.4 | Pixel Blade [Boss Pillar Breaker + Auto Replay]"
+    or "⚔️ Delta Hub v5.4 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -4936,7 +5124,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.3 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.4 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -5034,6 +5222,15 @@ if CurrentGame == "PixelBlade" then
         Config.PB_InfDashAndNoCD = val
     end)
 
+    addToggle(TabPBFarm, "🏛️ هدم عواميد بوس W5 تلقائياً لفتح حصانته (Break Boss Pillars)", Config.PB_BreakBossPillars, function(val)
+        Config.PB_BreakBossPillars = val
+        if val then
+            applyPBTempBuffAndHeal(true)
+        else
+            State.PB_BossStuckSince = nil
+        end
+        saveConfig()
+    end)
     addToggle(TabPBFarm, "تكسير الصناديق/البراميل تلقائياً (Auto Breakables)", Config.PB_AutoBreakables, function(val)
         Config.PB_AutoBreakables = val
     end)
