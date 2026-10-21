@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v5.4 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v5.5 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v5.4)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v5.5)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -1450,7 +1450,7 @@ end
 -- Only scans workspace:GetChildren() (never deep room trees that contain hidden Boss Arena rigs!)
 local function collectAllPBModels()
     local now = tick()
-    if State.PB_CachedModels and #State.PB_CachedModels > 0 and (now - (State.PB_LastModelScanTime or 0)) < 0.14 then
+    if State.PB_CachedModels and #State.PB_CachedModels > 0 and (now - (State.PB_LastModelScanTime or 0)) < 0.20 then
         return State.PB_CachedModels
     end
     State.PB_LastModelScanTime = now
@@ -1943,6 +1943,7 @@ local function findBestPBTarget(isRaid)
     local currentRangedMob, currentRangedPart, currentRangedDist = nil, nil, math.huge
     local currentActiveMob, currentActivePart, currentActiveDist = nil, nil, math.huge
     local currentRoomMob, currentRoomPart, currentRoomDist = nil, nil, math.huge
+    local currentBossMob, currentBossPart, currentBossDist = nil, nil, math.huge
 
     local sinceLastRoom = State.PB_LastActiveRoomTime and (now - State.PB_LastActiveRoomTime) or 0
     local maxNextRoomDist = isRaid and math.huge or ((sinceLastRoom >= 4.0) and 280 or 200)
@@ -2013,6 +2014,14 @@ local function findBestPBTarget(isRaid)
                             State.PB_FoughtBossInSession = true
                         end
 
+                        -- v5.5 BOSS-LOCK: an activated Boss (named Boss OR inside the Boss Arena) in reach is kept as
+                        -- THE target — swings never get wasted chasing stray adds around the Boss!
+                        if (isBossName or inBossRoom) and hadEnt == true and distFromMe < currentBossDist and distFromMe <= 140 then
+                            currentBossDist = distFromMe
+                            currentBossMob = v
+                            currentBossPart = part
+                        end
+
                         if not isBossName and pbHasActiveHealOrDrainBeam(v) and distFromMe < currentBeamDist then
                             currentBeamDist = distFromMe
                             currentBeamMob = v
@@ -2054,6 +2063,12 @@ local function findBestPBTarget(isRaid)
                 end
             end
         end
+    end
+
+    -- v5.5 BOSS-LOCK: while the activated Boss is in reach, NEVER switch away from it — the stray adds around it die
+    -- automatically thanks to the 45-stud expanded hitbox + 999s stun aura + the room-wide extra onHit burst!
+    if currentBossMob then
+        return currentBossMob, currentBossPart
     end
 
     -- 1. Always finish 100% of enemies in the CURRENT active room first (Healer/Drainer #1 -> Ranged #2 -> Melee #3)!
@@ -2271,6 +2286,20 @@ local function applyPBTempBuffAndHeal(forceBuff)
     end
 end
 
+-- v5.5 Zero-Lag Throttle: a 999s stun only needs ONE fire per mob per 6s (the stun lasts 999s anyway!).
+-- This removes the repeated abilityHit spam (biggest network+CPU saving -> higher FPS, same protection).
+local function pbShouldSendStun(mob)
+    if not State.PB_LastStunSent then
+        State.PB_LastStunSent = setmetatable({}, { __mode = "k" })
+    end
+    local nowStun = tick()
+    if (nowStun - (State.PB_LastStunSent[mob] or 0)) < 6.0 then
+        return false
+    end
+    State.PB_LastStunSent[mob] = nowStun
+    return true
+end
+
 -- 360° Anti-Monster Damage Protection Shield (حماية اللاعب من ضرر الوحوش بدون لاق):
 -- 1. Continuously stuns all active enemies within 75 studs using abilityHit ({stun = {dur = 999}}) WITHOUT tornado lag!
 -- 2. Disables CanTouch on enemy attack limbs/weapons (preserving basehitbox.CanTouch = true for player's sword) so monster touch hitboxes cannot hurt the player!
@@ -2301,8 +2330,8 @@ local function pbProtectPlayerFromMonsters()
                                 eHum.WalkSpeed = 0
                             end
                         end)
-                        -- Server-side 999s stun (Zero-Lag: no useAbility("tornado")!)
-                        if abilityHit and stunnedCount < 6 then
+                        -- Server-side 999s stun (Zero-Lag: no tornado! + max ONE fire per mob per 6s = no spam!)
+                        if abilityHit and stunnedCount < 6 and pbShouldSendStun(v) then
                             stunnedCount = stunnedCount + 1
                             pcall(function()
                                 abilityHit:FireServer(eHum, math.huge, { ["stun"] = { ["dur"] = 999 } })
@@ -2333,10 +2362,11 @@ end
 -- 100% Crash-Free Mobile Sword Button (🗡️) & Jump Button (^) Finder (Scans at most once every 5.0s, ZERO C++ hooks!)
 local function pbFindSwordAndJumpButtons()
     local now = tick()
-    if State.PB_CachedSwordBtn and State.PB_CachedSwordBtn.Parent and (now - (State.PB_LastBtnScanTime or 0)) < 5.0 then
+    -- v5.5 FPS: cached button scan now lasts 15s (buttons never move during a fight) = 3x fewer GUI scans
+    if State.PB_CachedSwordBtn and State.PB_CachedSwordBtn.Parent and (now - (State.PB_LastBtnScanTime or 0)) < 15.0 then
         return State.PB_CachedSwordBtn, State.PB_CachedJumpBtn
     end
-    if (now - (State.PB_LastBtnScanTime or 0)) < 5.0 then
+    if (now - (State.PB_LastBtnScanTime or 0)) < 15.0 then
         return State.PB_CachedSwordBtn, State.PB_CachedJumpBtn
     end
     State.PB_LastBtnScanTime = now
@@ -2492,7 +2522,8 @@ local function pbDamageModel(v, wpnDmg)
             onHit:FireServer(targetObj, dmgVal, {}, 0)
         end
         -- 2. Zero-Lag 999s Stun + Instant Damage on primary target (abilityHit WITHOUT useAbility("tornado") so 0 lag!)
-        if abilityHit and hum and hum.Health > 0 then
+        --    Throttled: re-send max once per 6s per mob (dur = 999s) — no packet spam while grinding the Boss!
+        if abilityHit and hum and hum.Health > 0 and pbShouldSendStun(v) then
             abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 999 } })
         end
         if useAbility and (v.Name == "Maneater" or v:FindFirstChild("worm")) then
@@ -2519,7 +2550,7 @@ local function pbDamageModel(v, wpnDmg)
                                     onHit:FireServer(oHum, 9999999999, {}, 0)
                                     onHit:FireServer(oHum, dmgVal, {}, 0)
                                 end
-                                if abilityHit then
+                                if abilityHit and pbShouldSendStun(other) then
                                     abilityHit:FireServer(oHum, math.huge, { ["stun"] = { ["dur"] = 999 } })
                                 end
                                 extraHits = extraHits + 1
@@ -2569,8 +2600,11 @@ local function pbPositionAtTarget(mob, part, forceTeleport)
     local pivot = part.CFrame
     pcall(function() pivot = mob:GetPivot() end)
     local mobPos = pivot.Position
-    local backOffset = Config.PB_PlayerProtection and -7.8 or -6.0
-    local yOffset = Config.PB_PlayerProtection and 2.8 or 2.0
+    -- v5.5 HIT-ACCURACY FIX: stand CLOSE (5.4 studs behind, only +1.5 up) so every Auto-Clicker swing physically
+    -- connects on the monster (and the Boss!), while the expanded basehitbox (45x45x45) still hits everything,
+    -- and the stun/CanTouch protection keeps the player safe even at this close distance.
+    local backOffset = Config.PB_PlayerProtection and -5.4 or -5.0
+    local yOffset = Config.PB_PlayerProtection and 1.5 or 1.8
     local offsetDir = (mob.Name == "Nekros" or mob.Name == "DarkNekros") and 3.5 or backOffset
     local desiredXZ = mobPos + (pivot.LookVector * offsetDir)
 
@@ -2579,7 +2613,9 @@ local function pbPositionAtTarget(mob, part, forceTeleport)
     local horizDistToSpot = Vector2.new(myPos.X - desiredXZ.X, myPos.Z - desiredXZ.Z).Magnitude
     local vertDiff = myPos.Y - mobPos.Y
 
-    if distToMob > 11.5 or horizDistToSpot > 4.5 or vertDiff < -1.0 or vertDiff > 15.0 then
+    -- v5.5: tight continuous tracking — if the mob/boss walks away, follow instantly (hits never wasted on empty air!).
+    -- Reposition cost is ONE CFrame write max per Loop 2F tick = zero measurable lag.
+    if distToMob > 9.0 or horizDistToSpot > 3.8 or vertDiff < -1.2 or vertDiff > 13.0 then
         local startPos = Vector3.new(desiredXZ.X, mobPos.Y + yOffset, desiredXZ.Z)
         local lookAtPos = Vector3.new(mobPos.X, startPos.Y, mobPos.Z)
         HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
@@ -3461,168 +3497,248 @@ task.spawn(function()
     end
 end)
 
--- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v5.3 Smart Card Scoring — NEVER picks the potion card!)
--- v5.2 BUG: with no readable card text it blindly clicked the MIDDLE card (index 2 = Potion/Heal upgrade) and spammed
--- plrUpgrade even when no upgrade was pending -> the character kept drinking potions instead of picking upgrades!
--- v5.3 RULES: (a) only act while the upgrade popup is actually OPEN, (b) score cards by text (Overhead > Damage),
--- (c) explicitly NEVER pick Potion/Heal cards, (d) no random-fire.
--- IMPORTANT: Never pushes upgradeFrame off-screen to Y = -1.1 before selecting the upgrade so buttons have valid screen coordinates!
-task.spawn(function()
-    while State.Running do
-        task.wait(0.28)
-        pcall(function()
-            local dBlur = Lighting:FindFirstChild("deathBlur")
-            if dBlur then dBlur.Size = 0 end
-            local sBlur = Lighting:FindFirstChild("screenBlur")
-            if sBlur then sBlur.Size = 0 end
+-- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v5.5 — WORKS EVEN IF POPUP PATH CHANGES!)
+-- v5.3 BUG (why it still failed): everything was gated behind "upgradeFrame visible & size>40" — when the mobile
+-- popup reports a 0-size/renamed frame the loop NEVER fired plrUpgrade at all. Neverlose fires the remote constantly
+-- and it always works. v5.5 RULES: (a) fire plrUpgrade every cycle (server ignores it while nothing is pending),
+-- (b) 1Hz PlayerGui-wide card scan gives Overhead/Damage priority + real slot index + veto Potion/Heal cards,
+-- (c) card click + correct One/Two/Three key only when a card was actually found. ZERO extra lag (GUI scan 1x/s).
+local PB_UPG_BAD_KW = { "reroll", "robux", "skip", "close", "exit", "buy", "purchase" }
+local PB_UPG_POTION_KW = { "potion", "heal", "regen", "revive", "lifesteal", "vamp" }
+local PB_UPG_DMG_KW = { "damage", "dmg", "attack", "m1", "strength", "critical", "might", "speed" }
+local PB_UPG_FRAMES_KW = { "upgrade", "pickcard", "cardframe", "chooseupgrade" }
 
+local function pbFindUpgradeCard()
+    local bestBtn, bestScore, bestSlot = nil, -math.huge, nil
+    local candidateFrames = {}
+
+    pcall(function()
+        for _, gui in ipairs(PlayerGui:GetChildren()) do
+            if gui ~= State.HubScreenGui and gui:IsA("ScreenGui") and gui.Enabled then
+                local lowG = string.lower(gui.Name)
+                if string.find(lowG, "upgrade", 1, true) then
+                    table.insert(candidateFrames, gui)
+                end
+                for _, desc in ipairs(gui:GetDescendants()) do
+                    if (desc:IsA("Frame") or desc:IsA("ScrollingFrame")) and isGuiVisible(desc) then
+                        local n = string.lower(desc.Name)
+                        for _, kw in ipairs(PB_UPG_FRAMES_KW) do
+                            if string.find(n, kw, 1, true) then
+                                table.insert(candidateFrames, desc)
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    local gameUI = PlayerGui:FindFirstChild("gameUI")
+    local upgFrame = gameUI and gameUI:FindFirstChild("upgradeFrame")
+    if upgFrame then
+        table.insert(candidateFrames, upgFrame)
+    end
+
+    for _, fr in ipairs(candidateFrames) do
+        local items = {}
+        pcall(function()
+            for _, d in ipairs(fr:GetDescendants()) do
+                if d:IsA("GuiButton") and isGuiVisible(d) then
+                    local sz = d.AbsoluteSize
+                    if sz.X >= 18 and sz.Y >= 18 then
+                        local txt = string.lower(d.Name)
+                        if d:IsA("TextButton") and d.Text then
+                            txt = txt .. " " .. string.lower(d.Text)
+                        end
+                        if d.Parent then
+                            txt = txt .. " " .. string.lower(d.Parent.Name)
+                            if d.Parent.Parent then
+                                txt = txt .. " " .. string.lower(d.Parent.Parent.Name)
+                            end
+                        end
+                        for _, sub in ipairs(d:GetDescendants()) do
+                            if (sub:IsA("TextLabel") or sub:IsA("TextBox")) and sub.Text then
+                                txt = txt .. " " .. string.lower(sub.Text)
+                            end
+                        end
+                        local bad = false
+                        for _, kw in ipairs(PB_UPG_BAD_KW) do
+                            if string.find(txt, kw, 1, true) then
+                                bad = true
+                                break
+                            end
+                        end
+                        if not bad then
+                            local score = 0
+                            if string.find(txt, "overhead", 1, true) then
+                                score = 100
+                            else
+                                for _, kw in ipairs(PB_UPG_DMG_KW) do
+                                    if string.find(txt, kw, 1, true) then
+                                        score = 50
+                                        break
+                                    end
+                                end
+                            end
+                            for _, kw in ipairs(PB_UPG_POTION_KW) do
+                                if string.find(txt, kw, 1, true) then
+                                    score = -100
+                                    break
+                                end
+                            end
+                            table.insert(items, { btn = d, x = d.AbsolutePosition.X, score = score })
+                        end
+                    end
+                end
+            end
+        end)
+        if #items >= 2 then
+            table.sort(items, function(a, b) return a.x < b.x end)
+            local pickIdx = 1
+            for i, it in ipairs(items) do
+                if it.score > items[pickIdx].score then
+                    pickIdx = i
+                end
+            end
+            -- Real on-screen slot index (left=1, middle=2, right=3). NEVER let the fallback default land on card 2
+            -- (middle) blindly; with no readable text we pick slot 1 (left) instead of v5.2 middle-potion bug!
+            local chosen = items[pickIdx]
+            local slot = math.clamp(chosen.score >= 0 and pickIdx or (pickIdx == 2 and 1 or pickIdx), 1, #items)
+            if chosen.score > bestScore then
+                bestScore = chosen.score
+                bestBtn = chosen.btn
+                bestSlot = slot
+            end
+        end
+    end
+
+    return bestBtn, bestSlot or nil
+end
+
+task.spawn(function()
+    local lastScanTick, cachedCardBtn, cachedSlot = 0, nil, nil
+    local lastPickTick = 0
+    while State.Running do
+        task.wait(0.25)
+        pcall(function()
+            if not Config.PB_AutoUpgrade then return end
+
+            local dBlur = Lighting:FindFirstChild("deathBlur")
+            if dBlur and dBlur.Size ~= 0 then dBlur.Size = 0 end
+            local sBlur = Lighting:FindFirstChild("screenBlur")
+            if sBlur and sBlur.Size ~= 0 then sBlur.Size = 0 end
+
+            -- Keep the popup on-screen (never at Y = -1.1) so card coordinates stay clickable
             local gameUI = PlayerGui:FindFirstChild("gameUI")
             local upgFrame = gameUI and gameUI:FindFirstChild("upgradeFrame")
-
-            -- Restore upgradeFrame onto screen if a previous version moved it to Y = -1.1
             if upgFrame and not Config.PB_HideUpgradePopup and upgFrame.Position.Y.Scale < -0.2 then
                 upgFrame.Position = UDim2.new(0, 0, 0, 0)
             end
 
-            if Config.PB_AutoUpgrade then
-                local pbRemotes = getPBRemotes()
-                local upgRemote = pbRemotes and pbRemotes:FindFirstChild("plrUpgrade")
+            local cutscene = workspace:FindFirstChild("inCutscene")
+            if cutscene and cutscene.Value == true then return end
 
-                local upgVisible = upgFrame and isGuiVisible(upgFrame) and upgFrame.AbsoluteSize.X > 40 and upgFrame.AbsoluteSize.Y > 40
-
-                if not upgVisible then
-                    -- No upgrade selection pending -> do NOT fire plrUpgrade / keys at all!
-                    if Config.PB_HideUpgradePopup and upgFrame then
-                        upgFrame.Position = UDim2.new(0, 0, -1.1, 0)
-                    end
-                    return
-                end
-
-                local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
-                local candidateBtns = {}
-                for _, desc in ipairs(upgFrame:GetDescendants()) do
-                    if desc:IsA("GuiButton") and isGuiVisible(desc) then
-                        local sz = desc.AbsoluteSize
-                        local pos = desc.AbsolutePosition
-                        if sz.X >= 24 and sz.Y >= 24 and pos.X >= -50 and pos.Y >= -80 and pos.X <= vp.X + 50 and pos.Y <= vp.Y + 80 then
-                            local combinedText = string.lower(desc.Name or "")
-                            if desc:IsA("TextButton") and desc.Text then
-                                combinedText = combinedText .. " " .. string.lower(desc.Text)
-                            end
-                            -- Include parent/ancestor names too (cards are often named "Card1"/"Upgrade2" with a TextLabel sibling)
-                            local anc = desc.Parent
-                            for _ = 1, 3 do
-                                if anc and anc ~= upgFrame then
-                                    combinedText = combinedText .. " " .. string.lower(anc.Name or "")
-                                    for _, sib in ipairs(anc:GetChildren()) do
-                                        if sib:IsA("TextLabel") or sib:IsA("TextButton") then
-                                            combinedText = combinedText .. " " .. string.lower(sib.Text or "")
-                                        end
-                                    end
-                                    anc = anc.Parent
-                                end
-                            end
-                            for _, sub in ipairs(desc:GetDescendants()) do
-                                if (sub:IsA("TextLabel") or sub:IsA("TextBox")) and sub.Text then
-                                    combinedText = combinedText .. " " .. string.lower(sub.Text)
-                                end
-                            end
-                            if not string.find(combinedText, "reroll", 1, true)
-                                and not string.find(combinedText, "robux", 1, true)
-                                and not string.find(combinedText, "skip", 1, true)
-                                and not string.find(combinedText, "close", 1, true)
-                                and not string.find(combinedText, "exit", 1, true) then
-                                -- v5.3 Smart scoring: Overhead #1 -> Damage/Attack/Speed #2 -> neutral #0 -> Potion/Heal NEVER (veto)
-                                local score = 0
-                                if string.find(combinedText, "overhead", 1, true) then
-                                    score = 100
-                                elseif string.find(combinedText, "damage", 1, true) or string.find(combinedText, "dmg", 1, true)
-                                    or string.find(combinedText, "attack", 1, true) or string.find(combinedText, "m1", 1, true)
-                                    or string.find(combinedText, "critical", 1, true) or string.find(combinedText, "speed", 1, true)
-                                    or string.find(combinedText, "strength", 1, true) then
-                                    score = 50
-                                end
-                                if string.find(combinedText, "potion", 1, true) or string.find(combinedText, "heal", 1, true)
-                                    or string.find(combinedText, "regen", 1, true) or string.find(combinedText, "revive", 1, true)
-                                    or string.find(combinedText, "vamp", 1, true) or string.find(combinedText, "lifesteal", 1, true) then
-                                    score = -100
-                                end
-                                table.insert(candidateBtns, {
-                                    btn = desc,
-                                    text = combinedText,
-                                    score = score,
-                                    x = pos.X
-                                })
-                            end
-                        end
-                    end
-                end
-
-                -- Sort by score DESC, then left-to-right position (cards 1/2/3 follow this order!)
-                table.sort(candidateBtns, function(a, b)
-                    if a.score ~= b.score then
-                        return a.score > b.score
-                    end
-                    return a.x < b.x
-                end)
-
-                local chosenIndex = 1
-                local targetCardBtn = nil
-                if #candidateBtns > 0 then
-                    targetCardBtn = candidateBtns[1].btn
-                    -- chosenIndex must be the REAL on-screen slot (leftmost=1, middle=2, rightmost=3), not the sort rank!
-                    local byX = {}
-                    for i, item in ipairs(candidateBtns) do
-                        table.insert(byX, { btn = item.btn, x = item.x, rank = i, slot = tonumber(string.match(item.text, "card%s*(%d)")) or tonumber(string.match(item.text, "upgrade%s*(%d)")) })
-                    end
-                    table.sort(byX, function(a, b) return a.x < b.x end)
-                    for slotPos, item in ipairs(byX) do
-                        if item.rank == 1 then
-                            chosenIndex = item.slot or slotPos
-                            break
-                        end
-                    end
-                    chosenIndex = math.clamp(chosenIndex, 1, 3)
-                end
-                -- If only Potion/Heal cards were detected (all vetoed), still clear the popup with the FIRST card (never #2!)
-
-                -- 1. Fire plrUpgrade remote ONLY while the popup is open, with the chosen (non-potion) card index
-                if upgRemote then
-                    upgRemote:FireServer(chosenIndex)
-                end
-
-                -- 2. Exact thha3203/pixel-blade-v5.lua key select for the CHOSEN index (One/Two/Three)
-                if VirtualInputManager then
-                    local keyToSend = (chosenIndex == 1 and Enum.KeyCode.One)
-                        or (chosenIndex == 3 and Enum.KeyCode.Three)
-                        or Enum.KeyCode.Two
-                    VirtualInputManager:SendKeyEvent(true, keyToSend, false, game)
-                    task.wait(0.03)
-                    VirtualInputManager:SendKeyEvent(false, keyToSend, false, game)
-
-                    -- 3. Also click the chosen upgrade card button on screen!
-                    if targetCardBtn and targetCardBtn.Parent and not State.PB_M1ClickInFlight then
-                        State.PB_M1ClickInFlight = true
-                        pcall(function()
-                            local inset = GuiService:GetGuiInset()
-                            local pos = targetCardBtn.AbsolutePosition
-                            local sz = targetCardBtn.AbsoluteSize
-                            local cx = math.floor(pos.X + sz.X * 0.5)
-                            local cy = math.floor(pos.Y + sz.Y * 0.5 + inset.Y)
-                            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
-                            task.wait(0.02)
-                            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
-                        end)
-                        State.PB_M1ClickInFlight = false
-                        State.PB_DungeonStatusText = "⬆️ تم اختيار الترقية تلقائياً (بأولوية Overhead، بدون بوشن)"
-                    end
-                end
-
-                if Config.PB_HideUpgradePopup then
-                    upgFrame.Position = UDim2.new(0, 0, -1.1, 0)
+            -- 1Hz card scan (cached) — cheap for FPS
+            local now = tick()
+            if (now - lastScanTick) >= 1.0 then
+                lastScanTick = now
+                cachedCardBtn, cachedSlot = pbFindUpgradeCard()
+                if cachedCardBtn and not (cachedCardBtn.Parent and isGuiVisible(cachedCardBtn)) then
+                    cachedCardBtn = nil
                 end
             end
+
+            local pbRemotes = getPBRemotes()
+            local upgRemote = pbRemotes and pbRemotes:FindFirstChild("plrUpgrade")
+            local chosenIndex = cachedSlot or 1
+            local pickInterval = cachedCardBtn and 0.3 or 0.7
+            if (now - lastPickTick) < pickInterval then return end
+            lastPickTick = now
+
+            -- (a) Fire plrUpgrade EVERY cycle like the proven Neverlose script (no-op while nothing is pending,
+            --     instant pick the moment an upgrade popup opens!)
+            if upgRemote then
+                upgRemote:FireServer(chosenIndex)
+            end
+
+            if VirtualInputManager then
+                -- (b) Correct hotkey for the chosen slot
+                local keyToSend = (chosenIndex == 1 and Enum.KeyCode.One)
+                    or (chosenIndex == 3 and Enum.KeyCode.Three)
+                    or Enum.KeyCode.Two
+                VirtualInputManager:SendKeyEvent(true, keyToSend, false, game)
+                task.wait(0.03)
+                VirtualInputManager:SendKeyEvent(false, keyToSend, false, game)
+
+                -- (c) Real touch click on the found card center (mobile popup works via physical click)
+                if cachedCardBtn and cachedCardBtn.Parent and not State.PB_M1ClickInFlight then
+                    State.PB_M1ClickInFlight = true
+                    pcall(function()
+                        local inset = GuiService:GetGuiInset()
+                        local pos = cachedCardBtn.AbsolutePosition
+                        local sz = cachedCardBtn.AbsoluteSize
+                        local cx = math.floor(pos.X + sz.X * 0.5)
+                        local cy = math.floor(pos.Y + sz.Y * 0.5 + inset.Y)
+                        VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+                        task.wait(0.02)
+                        VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+                    end)
+                    State.PB_M1ClickInFlight = false
+                    State.PB_DungeonStatusText = "⬆️ تم اختيار الترقية تلقائياً (أولوية Overhead، بدون بوشن)"
+                end
+            end
+
+            if Config.PB_HideUpgradePopup and upgFrame then
+                upgFrame.Position = UDim2.new(0, 0, -1.1, 0)
+            end
         end)
+    end
+end)
+
+-- ======================= 🚀 v5.5 Auto FPS Boost (بدون أي خيار جديد — تلقائي) =======================
+-- يرفع الـ FPS في الجوال والكمبيوتر بدون أي إضافات على الواجهة: يطفئ الظلال وتأثيرات ما بعد المعالجة
+-- (Blur/Bloom/SunRays/Atmosphere) ويحط جودة التكس처 على الأدنى ويفتح حد الفريمات (PC فقط).
+-- تأثيرات رسومية محلية 100% — لا تمس القتال أو السيرفر ولا تسبب أي لاق. تعاد كل 12 ثانية لو رجعتها اللعبة.
+local function pbApplyFpsBoost()
+    pcall(function()
+        Lighting.GlobalShadows = false
+    end)
+    pcall(function()
+        for _, fx in ipairs(Lighting:GetChildren()) do
+            if fx:IsA("PostEffect") or fx:IsA("BaseEffect") then
+                fx.Enabled = false
+            end
+        end
+    end)
+    pcall(function()
+        workspace.TerrainQuality = Enum.TerrainQuality.PerformanceLow
+    end)
+    pcall(function()
+        game:GetService("ContentProvider"):SetTextureQualityLevel(0, false)
+    end)
+    pcall(function()
+        settings().Rendering.EnableFRM = true
+    end)
+    pcall(function()
+        -- تشغيل التحجيم التلقائي للدقة: خفظ الـ FPS على الموبايل (Roblox يخفض الدقة بدل التقطيع)
+        game:GetService("RunService"):Set3dResolutionScaleEnabled(true)
+    end)
+end
+task.spawn(function()
+    pbApplyFpsBoost()
+    pcall(function()
+        Lighting.ChildAdded:Connect(function(c)
+            pcall(function()
+                if c:IsA("PostEffect") or c:IsA("BaseEffect") then
+                    c.Enabled = false
+                end
+            end)
+        end)
+    end)
+    while State.Running do
+        task.wait(12.0)
+        pbApplyFpsBoost()
     end
 end)
 
@@ -3630,7 +3746,7 @@ end)
 -- IMPORTANT: Keeps character CanCollide intact so the player stands on the floor, never sinks, and jumps naturally with Humanoid.Jump!
 task.spawn(function()
     while State.Running do
-        task.wait(0.22)
+        task.wait(0.35)
         pcall(function()
             if Config.PB_GodBuffAndHeal or Config.PB_PlayerProtection or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_KillAura then
                 applyPBTempBuffAndHeal(false)
@@ -3652,7 +3768,7 @@ end)
 -- 2E. Dedicated Pixel Blade Hitbox Expander & Bring Mobs Loop
 task.spawn(function()
     while State.Running do
-        task.wait(0.30)
+        task.wait(0.45)
         if Config.PB_ExpandHitbox or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_BringMobs then
             pcall(pbBringAndExpandTargets)
         end
@@ -3713,16 +3829,19 @@ task.spawn(function()
                         -- If the targeted real boss takes ZERO damage for >= 3s, activate the PILLAR PHASE; findBestPBTarget
                         -- then redirects the player to break the arena pillars (the boss only unlocks after they are destroyed).
                         local mobIsPillar = Config.PB_BreakBossPillars and not isRaid and isPBPillarModel(mob)
-                        if Config.PB_BreakBossPillars and not isRaid and (mobIsPillar or PB_BOSS_NAMES[mob.Name] == true or hadEnt == true) then
+                        local mobIsRealBoss = PB_BOSS_NAMES[mob.Name] == true
+                        if Config.PB_BreakBossPillars and not isRaid and (mobIsPillar or mobIsRealBoss or hadEnt == true) then
                             if State.PB_BossWatchMob ~= mob or not State.PB_BossWatchTick then
                                 State.PB_BossWatchMob = mob
                                 State.PB_BossWatchTick = tick()
                                 State.PB_BossWatchHP = hp
                             elseif hp < (State.PB_BossWatchHP or hp) - 0.5 then
-                                -- Boss is taking damage now -> pillars destroyed -> leave the pillar phase!
                                 State.PB_BossWatchHP = hp
                                 State.PB_BossWatchTick = tick()
-                                State.PB_BossStuckSince = nil
+                                -- Only BOSS damage (not pillar damage!) means the pillars are down -> leave the pillar phase
+                                if not mobIsPillar then
+                                    State.PB_BossStuckSince = nil
+                                end
                             elseif (tick() - State.PB_BossWatchTick) >= 3.0 then
                                 State.PB_BossWatchTick = tick()
                                 State.PB_BossWatchHP = hp
@@ -3766,7 +3885,16 @@ task.spawn(function()
                                 State.PB_BossStuckSince = tick()
                                 State.PB_DungeonStatusText = "🏛️ هدف غير قابل للكسر — البحث عن العمود التالي..."
                                 return
-                            elseif not isRaid and not mobIsPillar and hadEnt ~= true and mobStallSecs >= 2.5 then
+                            elseif not isRaid and not mobIsPillar and not mobIsRealBoss and hadEnt == true and mobStallSecs >= 6.5 then
+                                -- v5.5: enemy in an OPENED room that refuses all damage for 6.5s (desync/phantom) ->
+                                -- 45s lock so the farm rotates to another room instead of freezing (no perm blacklist here!)
+                                State.PB_LockedMobIgnoreUntil = State.PB_LockedMobIgnoreUntil or {}
+                                State.PB_LockedMobIgnoreUntil[mob] = tick() + 45.0
+                                State.PB_TrackingMob = nil
+                                State.PB_ActiveFollowMob = nil
+                                State.PB_ActiveFollowPart = nil
+                                return
+                            elseif not isRaid and not mobIsPillar and not mobIsRealBoss and hadEnt ~= true and mobStallSecs >= 2.5 then
                                 State.PB_LockedMobIgnoreUntil = State.PB_LockedMobIgnoreUntil or {}
                                 local expireAt = tick() + 45.0
                                 State.PB_LockedMobIgnoreUntil[mob] = expireAt
@@ -3786,7 +3914,7 @@ task.spawn(function()
                                     end
                                     local stubbornCnt = (State.PB_StubbornLockCount[mob] or 0) + 1
                                     State.PB_StubbornLockCount[mob] = stubbornCnt
-                                    if stubbornCnt >= 2 then
+                                    if stubbornCnt >= 2 and hadEnt ~= true then
                                         State.PB_InvulnerableMobs = State.PB_InvulnerableMobs or {}
                                         State.PB_InvulnerableMobs[mob] = tick() + 600.0
                                         State.PB_DungeonStatusText = "⛔ تجاهل وحش وهمي/محصّن للأبد في هذه الجولة!"
@@ -4037,12 +4165,15 @@ local function pbCheckAndReplayDungeon(pbRemotes)
         pcall(function()
             local gotChest = pbRemotes:FindFirstChild("gotChest")
             if gotChest then gotChest:FireServer() end
-            if fireproximityprompt and HumanoidRootPart then
+            if fireproximityprompt and HumanoidRootPart and inDungeonNow then
+                local firedPrompts = 0
                 for _, desc in ipairs(workspace:GetDescendants()) do
                     if desc:IsA("ProximityPrompt") and desc.Enabled then
                         local pPart = desc.Parent and (desc.Parent:IsA("BasePart") and desc.Parent or desc.Parent:FindFirstChildWhichIsA("BasePart"))
                         if pPart and (pPart.Position - HumanoidRootPart.Position).Magnitude <= 100 then
                             fireproximityprompt(desc)
+                            firedPrompts = firedPrompts + 1
+                            if firedPrompts >= 4 then break end
                         end
                     end
                 end
@@ -4754,8 +4885,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v5.4 | Pixel Blade [Boss Pillar Breaker + Auto Replay]"
-    or "⚔️ Delta Hub v5.4 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v5.5 | Pixel Blade [Hit-Lock + Auto Upgrade + FPS Boost]"
+    or "⚔️ Delta Hub v5.5 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5124,7 +5255,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.4 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.5 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -5222,15 +5353,6 @@ if CurrentGame == "PixelBlade" then
         Config.PB_InfDashAndNoCD = val
     end)
 
-    addToggle(TabPBFarm, "🏛️ هدم عواميد بوس W5 تلقائياً لفتح حصانته (Break Boss Pillars)", Config.PB_BreakBossPillars, function(val)
-        Config.PB_BreakBossPillars = val
-        if val then
-            applyPBTempBuffAndHeal(true)
-        else
-            State.PB_BossStuckSince = nil
-        end
-        saveConfig()
-    end)
     addToggle(TabPBFarm, "تكسير الصناديق/البراميل تلقائياً (Auto Breakables)", Config.PB_AutoBreakables, function(val)
         Config.PB_AutoBreakables = val
     end)
