@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v4.9 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v5.0 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Crash-Free Auto-Clicker M1 + Healer/Drainer #1 Priority v4.9)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Independent Auto-Clicker + Fixed Room Progression v5.0)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -1903,11 +1903,10 @@ local function findBestPBTarget(isRaid)
     local nextBossMob, nextBossPart, nextBossDist = nil, nil, math.huge
 
     for _, c in ipairs(inactiveCandidates) do
-        -- An isolated single model (neighbors == 0) when other mobs exist in the dungeon (especially with higher MaxHealth or when grouped waves exist)
-        -- is the pre-spawned Boss sitting in the circular Boss Arena!
-        local isIsolatedBoss = (#inactiveCandidates >= 2)
-            and (c.neighbors == 0)
-            and (hasAnyGroupedWave or c.maxHP > (minInactiveMaxHP * 1.5))
+        -- An isolated single unactivated model (neighbors == 0 and hadEnt == false) is the pre-spawned Boss sitting in the Boss Arena
+        -- (even when #inactiveCandidates == 1 right after clearing Room 1 while Room 2's wave is still spawning!)
+        local isIsolatedBoss = (c.neighbors == 0 and c.hadEnt == false)
+            and (hasAnyGroupedWave or #inactiveCandidates == 1 or c.maxHP > (minInactiveMaxHP * 1.4))
 
         local isBossCandidate = c.isBossName or c.inBossRoom or isIsolatedBoss
 
@@ -1918,7 +1917,7 @@ local function findBestPBTarget(isRaid)
                     nextWaveMob = c.mob
                     nextWavePart = c.part
                 end
-                if c.dist < fallbackWaveDist then
+                if c.dist <= 320 and c.dist < fallbackWaveDist then
                     fallbackWaveDist = c.dist
                     fallbackWaveMob = c.mob
                     fallbackWavePart = c.part
@@ -1930,7 +1929,7 @@ local function findBestPBTarget(isRaid)
                 nextNormalMob = c.mob
                 nextNormalPart = c.part
             end
-            if c.dist < fallbackNormalDist then
+            if c.dist <= 320 and c.dist < fallbackNormalDist then
                 fallbackNormalDist = c.dist
                 fallbackNormalMob = c.mob
                 fallbackNormalPart = c.part
@@ -1946,13 +1945,26 @@ local function findBestPBTarget(isRaid)
 
     -- Priority A: Closest multi-enemy normal room wave within adjacent distance (Room 2 -> Room 3 -> Room 4)
     if nextWaveMob then return nextWaveMob, nextWavePart end
-    -- Priority B: Any multi-enemy normal room wave anywhere in the dungeon (NEVER jumps to the lone Boss while a room wave exists!)
+    -- Priority B: Any multi-enemy normal room wave within 320 studs (NEVER jumps to the lone Boss while a room wave exists!)
     if fallbackWaveMob then return fallbackWaveMob, fallbackWavePart end
+
+    -- Wait at least 2.5s after clearing a room before considering any isolated/non-wave or Boss enemy
+    -- (gives the next wave / Room 2 door time to spawn its enemies instead of jumping to the pre-spawned Boss at t=0.1s!)
+    if State.PB_LastActiveRoomTime and sinceLastRoom < 2.5 then
+        return nil, nil
+    end
+
     -- Priority C: Closest non-Boss normal mob
     if nextNormalMob then return nextNormalMob, nextNormalPart end
     if fallbackNormalMob then return fallbackNormalMob, fallbackNormalPart end
-    -- Priority D: ONLY when 100% of normal room mobs are dead, enter the Boss Arena!
-    return nextBossMob, nextBossPart
+
+    -- Priority D: ONLY when 100% of normal room mobs are dead AND >= 3.0s have elapsed since clearing the last room, enter the Boss Arena!
+    if not State.PB_LastActiveRoomTime or sinceLastRoom >= 3.0 then
+        if nextBossDist <= 260 or sinceLastRoom >= 4.5 then
+            return nextBossMob, nextBossPart
+        end
+    end
+    return nil, nil
 end
 
 -- Lightweight Remote Breakables Destroyer (Exact Mana-scripts line 282-286: zero Tornado lag!)
@@ -2136,7 +2148,7 @@ end
 local function pbPerformRealM1Attack()
     if not Config.PB_AutoClicker then return end
     local now = tick()
-    if (now - (State.PB_LastM1Time or 0)) < 0.14 or State.PB_M1ClickInFlight then return end
+    if (now - (State.PB_LastM1Time or 0)) < 0.12 or State.PB_M1ClickInFlight then return end
     State.PB_LastM1Time = now
 
     pcall(function()
@@ -2193,9 +2205,17 @@ local function pbPerformRealM1Attack()
     end)
 end
 
--- Zero-Lag Auto-Clicker + Priority Healer/Drainer Burst Damage Engine
+-- Zero-Lag Priority Healer/Drainer Burst Damage & Stun Engine
+-- IMPORTANT: When PB_AutoClicker is ON, Loop 2G handles M1 Sword Button clicks (which trigger Character.localChar's native swing)!
+-- We NEVER spam swing:FireServer() from Lua while PB_AutoClicker is ON so Lua never interrupts or desyncs the Auto-Clicker sword swings!
 local function pbDamageModel(v, wpnDmg)
     if not v or not v:IsA("Model") or not v.Parent then return end
+    local now = tick()
+    if (now - (State.PB_LastRemoteHitTime or 0)) < 0.35 then
+        return
+    end
+    State.PB_LastRemoteHitTime = now
+
     local pbRemotes = getPBRemotes()
     if not pbRemotes then return end
 
@@ -2215,18 +2235,15 @@ local function pbDamageModel(v, wpnDmg)
     end
 
     pcall(function()
-        -- 1. Execute Pure Auto-Clicker Pulse (Jump + M1 Click + swing)
-        pbPerformRealM1Attack()
-
-        -- 2. Server Swing + Direct Weapon Hit on primary target
-        if swing then
+        -- 1. Only fire swing:FireServer() manually if PB_AutoClicker is OFF (when PB_AutoClicker is ON, the real Sword Button click fires swing!)
+        if swing and not Config.PB_AutoClicker then
             swing:FireServer()
         end
         if onHit and targetObj then
             onHit:FireServer(targetObj, 9999999999, {}, 0)
             onHit:FireServer(targetObj, dmgVal, {}, 0)
         end
-        -- 3. Zero-Lag Stun + Instant Damage on primary target (abilityHit WITHOUT useAbility("tornado") so 0 lag!)
+        -- 2. Zero-Lag Stun + Instant Damage on primary target (abilityHit WITHOUT useAbility("tornado") so 0 lag!)
         if abilityHit and hum and hum.Health > 0 then
             abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 2 } })
         end
@@ -2234,14 +2251,14 @@ local function pbDamageModel(v, wpnDmg)
             useAbility:FireServer("lunarSpell")
         end
 
-        -- 4. Simultaneously stun & burst-damage ANY active Healer/Drainer in the current room (<= 85 studs, hadEntrance == true)
+        -- 3. Simultaneously stun & burst-damage ANY active Healer/Drainer in the current room (<= 85 studs, hadEntrance == true)
         --    so they can NEVER finish healing other enemies or draining the player!
         if HumanoidRootPart and State.PB_CachedModels then
             local myPos = HumanoidRootPart.Position
             local extraHits = 0
             for _, other in ipairs(State.PB_CachedModels) do
                 if other and other ~= v and other.Parent and other:GetAttribute("hadEntrance") == true and isPBMobAlive(other) and pbIsHealerOrDrainerEnemy(other) then
-                    local oPart = getPBMobRootPart(other)
+                    local oPart = getPBMobTargetPart(other)
                     if oPart and (oPart.Position - myPos).Magnitude <= 85 then
                         local oHum = other:FindFirstChildOfClass("Humanoid") or other:FindFirstChild("Humanoid")
                         if oHum and oHum.Health > 0 then
@@ -2262,53 +2279,55 @@ local function pbDamageModel(v, wpnDmg)
     end)
 end
 
--- Computes the Overhead Jump-Slash Combat CFrame (5.5 studs behind the enemy, facing the enemy, hopping smoothly in a real jump arc!)
--- Prevents the character from ever sinking into the floor while satisfying all airborne checks for the "Overhead" upgrade!
-local function pbComputeCombatCFrame(mob, part)
-    if not mob or not part or not part.Parent then return nil, 0 end
-
-    local now = tick()
-    -- 0.42s parabolic jump cycle: smoothly hops from +1.2 studs (ground) up to +5.8 studs (overhead jump peak) and back!
-    local phase = (now % 0.42) / 0.42
-    local jumpArcY = 1.2 + (4.6 * 4.0 * phase * (1.0 - phase))
-    local jumpVelY = (phase < 0.5) and 28 or -28
-
-    if mob.Name == "Maneater" or mob:FindFirstChild("worm") then
-        local root = mob:FindFirstChild("Root") or mob:FindFirstChild("HumanoidRootPart") or part
-        local mobPos = Vector3.new(root.Position.X, 35 + jumpArcY, root.Position.Z)
-        local targetPos = mobPos + (root.CFrame.LookVector * -6.5)
-        return CFrame.lookAt(targetPos, Vector3.new(root.Position.X, 35, root.Position.Z)), jumpVelY
-    elseif mob.Name == "BookHand" then
-        local bh = mob:FindFirstChild("basehitbox") or mob:FindFirstChild("basehitbox", true) or part
-        return bh.CFrame * CFrame.new(0, jumpArcY, 4.5), jumpVelY
-    end
-
-    local pivot = part.CFrame
-    pcall(function() pivot = mob:GetPivot() end)
-    local mobPos = pivot.Position
-    local offsetDir = (mob.Name == "Nekros" or mob.Name == "DarkNekros") and 3.5 or -5.5
-    local desiredXZ = mobPos + (pivot.LookVector * offsetDir)
-    local targetPos = Vector3.new(desiredXZ.X, mobPos.Y + jumpArcY, desiredXZ.Z)
-    local lookAtPos = Vector3.new(mobPos.X, mobPos.Y + 1.2, mobPos.Z)
-    return CFrame.lookAt(targetPos, lookAtPos), jumpVelY
-end
-
+-- Auto-Clicker Friendly Combat Positioning (Exact thha3203 pixel-blade.lua Auto Farm M1 + v4.3 Jump Physics):
+-- 1. When far from the combat spot behind the monster (dist > 10.5 or horizDist > 4.2 or sinking below mobPos.Y - 1.0):
+--    teleports 6.0 studs behind the monster at mobPos.Y + 2.0, facing the monster upright.
+-- 2. Once behind the monster (dist <= 10.5 and horizDist <= 4.2 and Y in [mobPos.Y - 1.0 .. mobPos.Y + 14.0]):
+--    DOES NOT overwrite HumanoidRootPart.CFrame so the Auto-Clicker (Loop 2G) jumps & swings the sword non-stop without CFrame interruption!
 local function pbPositionAtTarget(mob, part, forceTeleport)
     refreshCharacterRefs()
     if not mob or not part or not part.Parent or not HumanoidRootPart then return end
+
+    State.PB_ActiveFollowMob = mob
+    State.PB_ActiveFollowPart = part
 
     if Humanoid then
         Humanoid.Jump = true
     end
 
-    local cf, jumpVelY = pbComputeCombatCFrame(mob, part)
-    if cf then
-        State.PB_ActiveFollowMob = mob
-        State.PB_ActiveFollowPart = part
-        State.PB_ActiveTargetCFrame = cf
-        HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, jumpVelY or 25, 0)
+    if mob.Name == "Maneater" or mob:FindFirstChild("worm") then
+        local root = mob:FindFirstChild("Root") or mob:FindFirstChild("HumanoidRootPart") or part
+        local mobPos = Vector3.new(root.Position.X, 35, root.Position.Z)
+        local targetPos = mobPos + (root.CFrame.LookVector * -6.5)
+        if (HumanoidRootPart.Position - targetPos).Magnitude > 5.0 then
+            HumanoidRootPart.CFrame = CFrame.lookAt(targetPos, mobPos)
+        end
+        return
+    elseif mob.Name == "BookHand" then
+        local bh = mob:FindFirstChild("basehitbox") or mob:FindFirstChild("basehitbox", true) or part
+        local desiredCF = bh.CFrame * CFrame.new(0, 2.5, 4.5)
+        if (HumanoidRootPart.Position - desiredCF.Position).Magnitude > 5.0 then
+            HumanoidRootPart.CFrame = desiredCF
+        end
+        return
+    end
+
+    local pivot = part.CFrame
+    pcall(function() pivot = mob:GetPivot() end)
+    local mobPos = pivot.Position
+    local offsetDir = (mob.Name == "Nekros" or mob.Name == "DarkNekros") and 3.5 or -6.0
+    local desiredXZ = mobPos + (pivot.LookVector * offsetDir)
+
+    local myPos = HumanoidRootPart.Position
+    local distToMob = (mobPos - myPos).Magnitude
+    local horizDistToSpot = Vector2.new(myPos.X - desiredXZ.X, myPos.Z - desiredXZ.Z).Magnitude
+    local vertDiff = myPos.Y - mobPos.Y
+
+    if distToMob > 10.5 or horizDistToSpot > 4.2 or vertDiff < -1.0 or vertDiff > 14.0 then
+        local startPos = Vector3.new(desiredXZ.X, mobPos.Y + 2.0, desiredXZ.Z)
+        local lookAtPos = Vector3.new(mobPos.X, startPos.Y, mobPos.Z)
         HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
-        HumanoidRootPart.CFrame = cf
+        HumanoidRootPart.CFrame = CFrame.lookAt(startPos, lookAtPos)
     end
 end
 
@@ -3045,20 +3064,15 @@ table.insert(State.Connections, RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- Pixel Blade Continuous Overhead Jump-Arc Follow & Anti-Floor-Sink Guard
+    -- Pixel Blade Anti-Spin Guard (Does NOT overwrite CFrame/Velocity in Heartbeat so real Roblox Jump + Auto-Clicker Sword Swing work 100% naturally!)
     if Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid then
         HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
-        if State.PB_ActiveFollowMob and State.PB_ActiveFollowPart and State.PB_ActiveFollowMob.Parent and isPBMobAlive(State.PB_ActiveFollowMob) then
-            local cf, jumpVelY = pbComputeCombatCFrame(State.PB_ActiveFollowMob, State.PB_ActiveFollowPart)
-            if cf then
-                State.PB_ActiveTargetCFrame = cf
-                HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, jumpVelY or 25, 0)
-                HumanoidRootPart.CFrame = cf
-            end
-        else
-            State.PB_ActiveFollowMob = nil
-            State.PB_ActiveFollowPart = nil
-            HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+        if HumanoidRootPart.AssemblyLinearVelocity.Y < -45 then
+            HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(
+                HumanoidRootPart.AssemblyLinearVelocity.X,
+                -20,
+                HumanoidRootPart.AssemblyLinearVelocity.Z
+            )
         end
     end
 
@@ -3180,7 +3194,8 @@ task.spawn(function()
     end
 end)
 
--- 2D. Dedicated Pixel Blade God Buff, Smooth Auto Heal, Noclip & Throttled Inf Dash Loop (Zero Lag!)
+-- 2D. Dedicated Pixel Blade God Buff, Smooth Auto Heal & Throttled Inf Dash Loop (Zero Lag!)
+-- IMPORTANT: Keeps character CanCollide intact so the player stands on the floor, never sinks, and jumps naturally with Humanoid.Jump!
 task.spawn(function()
     while State.Running do
         task.wait(0.40)
@@ -3192,12 +3207,8 @@ task.spawn(function()
                 State.PB_LastInfDashTick = tick()
                 applyPBInfDashAndNoCD()
             end
-            if (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) and Character then
-                for _, part in ipairs(Character:GetChildren()) do
-                    if part:IsA("BasePart") then
-                        part.CanCollide = false
-                    end
-                end
+            if HumanoidRootPart and not HumanoidRootPart.CanCollide then
+                HumanoidRootPart.CanCollide = true
             end
         end)
     end
@@ -3213,7 +3224,7 @@ task.spawn(function()
     end
 end)
 
--- 2F. Dedicated Pixel Blade Dungeon & Raid Auto Farm + Jump-Click Overhead M1 Loop (Zero Lag, Step-by-Step Room Progression!)
+-- 2F. Dedicated Pixel Blade Dungeon & Raid Auto Farm Movement & Step-by-Step Room Progression Loop
 task.spawn(function()
     while State.Running do
         task.wait(0.15)
@@ -3231,13 +3242,13 @@ task.spawn(function()
                         local hp = math.floor(getPBMobCurrentHP(mob))
                         local hadEnt = mob:GetAttribute("hadEntrance")
 
-                        -- Smooth Next-Room Transition Delay (Wait 0.8s when stepping into an adjacent unactivated room > 85 studs away)
-                        if not isRaid and hadEnt == false and dist > 85 and State.PB_LastTransitionedMob ~= mob then
+                        -- Smooth Next-Room Transition Delay (Wait 1.0s when stepping into an adjacent unactivated room > 80 studs away)
+                        if not isRaid and hadEnt == false and dist > 80 and State.PB_LastTransitionedMob ~= mob then
                             State.PB_LastTransitionedMob = mob
                             State.PB_ActiveFollowMob = nil
                             State.PB_ActiveFollowPart = nil
                             State.PB_DungeonStatusText = string.format("🚪 الانتقال للغرفة التالية (%s - %dم)...", tostring(mob.Name), dist)
-                            task.wait(0.8)
+                            task.wait(1.0)
                             refreshCharacterRefs()
                             mob, mobPart = findBestPBTarget(isRaid)
                             if not HumanoidRootPart or not mob or not mobPart or not mob.Parent or not isPBMobAlive(mob) then
@@ -3248,7 +3259,7 @@ task.spawn(function()
                             hadEnt = mob:GetAttribute("hadEntrance")
                         end
 
-                        -- Auto-Recovery if a room/boss stays locked (hadEntrance == false & 0 HP damage for >= 2.5s)
+                        -- Auto-Recovery if a room/boss stays locked (hadEntrance == false & 0 HP damage for >= 4.5s)
                         if State.PB_TrackingMob ~= mob then
                             State.PB_TrackingMob = mob
                             State.PB_TrackingMobStartTick = tick()
@@ -3257,14 +3268,14 @@ task.spawn(function()
                             if hp < (State.PB_TrackingMobStartHP or hp) or hadEnt == true then
                                 State.PB_TrackingMobStartTick = tick()
                                 State.PB_TrackingMobStartHP = hp
-                            elseif not isRaid and hadEnt == false and (tick() - (State.PB_TrackingMobStartTick or tick())) >= 2.5 then
+                            elseif not isRaid and hadEnt == false and (tick() - (State.PB_TrackingMobStartTick or tick())) >= 4.5 then
                                 State.PB_LockedMobIgnoreUntil = State.PB_LockedMobIgnoreUntil or {}
-                                local expireAt = tick() + 45.0
+                                local expireAt = tick() + 10.0
                                 State.PB_LockedMobIgnoreUntil[mob] = expireAt
                                 -- Also ignore any unactivated mobs inside that same locked room cluster (within 55 studs)
                                 for _, other in ipairs(workspace:GetChildren()) do
                                     if other:IsA("Model") and other ~= mob and other:GetAttribute("hadEntrance") == false then
-                                        local oPart = getPBMobRootPart(other)
+                                        local oPart = getPBMobTargetPart(other)
                                         if oPart and (oPart.Position - mobPart.Position).Magnitude <= 55 then
                                             State.PB_LockedMobIgnoreUntil[other] = expireAt
                                         end
@@ -3311,10 +3322,10 @@ task.spawn(function()
                             end
                         end
 
-                        -- Position 5.5 studs behind monster with Overhead Jump Arc
+                        -- Position 6.0 studs behind monster (stops overwriting CFrame once in range so Auto-Clicker swings freely!)
                         pbPositionAtTarget(mob, mobPart, true)
 
-                        -- Execute Pure Auto-Clicker + swing + onHit + abilityHit + Healer/Drainer Stun!
+                        -- Execute backup remote damage + Healer/Drainer Stun (while Loop 2G clicks the Sword Button non-stop!)
                         pbDamageModel(mob, currentPBWeaponDamage())
                     elseif Config.PB_AutoFarmDungeon then
                         State.PB_ActiveFollowMob = nil
@@ -3339,15 +3350,26 @@ task.spawn(function()
             elseif Config.PB_AutoClicker and HumanoidRootPart then
                 State.PB_ActiveFollowMob = nil
                 State.PB_ActiveFollowPart = nil
-                local cutscene = workspace:FindFirstChild("inCutscene")
-                if not (cutscene and cutscene.Value == true) then
-                    pbPerformRealM1Attack()
-                end
                 State.PB_DungeonStatusText = "🗡️ الأوتو كليكر يعمل..."
             else
                 State.PB_ActiveFollowMob = nil
                 State.PB_ActiveFollowPart = nil
                 State.PB_DungeonStatusText = "متوقف (جاهز للتشغيل)"
+            end
+        end)
+    end
+end)
+
+-- 2G. Dedicated Independent Auto-Clicker Loop (Runs 100% independently whether Dungeon Auto-Farm is ON or OFF!)
+task.spawn(function()
+    while State.Running do
+        task.wait(0.12)
+        pcall(function()
+            if Config.PB_AutoClicker and HumanoidRootPart then
+                local cutscene = workspace:FindFirstChild("inCutscene")
+                if not (cutscene and cutscene.Value == true) then
+                    pbPerformRealM1Attack()
+                end
             end
         end)
     end
@@ -4007,8 +4029,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v4.9 | Pixel Blade [Crash-Free Auto-Clicker + Healer #1]"
-    or "⚔️ Delta Hub v4.9 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v5.0 | Pixel Blade [Auto-Clicker + Dungeon Farm Sync]"
+    or "⚔️ Delta Hub v5.0 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -4377,7 +4399,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v4.9 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.0 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -4992,4 +5014,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v4.9] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v5.0] Loaded! Active Game Detected: " .. tostring(CurrentGame))
