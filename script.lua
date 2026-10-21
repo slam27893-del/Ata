@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v5.6 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v5.7 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v5.6)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v5.7)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -3501,40 +3501,95 @@ task.spawn(function()
     end
 end)
 
--- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v5.6 — REAL "PICK" BUTTON CLICKER for the Level-Up/Choose-Banner popup!)
--- WHY v5.5 STILL FAILED (proven by the user's screenshot of the popup): the current Level-Up screen is the
--- "CHOOSE BANNER" UI — three scroll cards (e.g. HEALTH BOOST I / FROST ELEMENT / CRITICAL BOOST) each with its own
--- "PICK" TextButton. v5.5 scanned upgradeFrame card buttons, sent 1/2/3 keys and fired plrUpgrade blindly, AND
--- early-returned whenever the game pauses the run during the popup (inCutscene=true) — so NOTHING was ever clicked.
--- v5.6 RULES: scan PlayerGui (0.45s throttle = zero lag) for the visible PICK buttons themselves, score each card by
--- its scroll text (Overhead #1 -> Crit #2 -> Damage/Elements #3; Potion/Heal vetoed; no middle-card defaults),
--- then click the chosen PICK button via fireclick + REAL VirtualInput touch click at its exact center (plus key +
--- legacy remote for older builds). While the popup is open the Auto-Clicker swings & farm movement pause
--- (State.PB_UpgradePopupOpen) so nothing fights the selection. When no popup: NOTHING fires (no side effects!).
-local function pbClickUpgradePick(btn)
+-- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v5.7 — PICK-CLICKER + EXACT user priority table!)
+-- v5.6 still failed because the real "PICK" label can be a TextLabel INSIDE an ImageButton (own .Text = "") and the
+-- screen position of the popup Gui may or may not include the GuiInset. v5.7 fixes both AND uses the exact upgrade
+-- priority requested by the user:
+--   1 Rage Spirits | 2 Spirit Capacity | 3 Stamina | 4 Flame Element | 5 Life Steal | 6 Poison Element
+--   7 Element Circle / Frost | 8 Recovery + Critical Boost | 9 Health Boost / Agility | 10 Thorns
+-- Layered clicking: fireclick -> VirtualInput touch click (alternating inset handling every attempt) -> touchTap
+-- (attempt>=2) -> firesignal MouseButton1Click (attempt>=3). Slot key + legacy plrUpgrade remote included.
+-- Zero lag: PlayerGui scan max 2x/sec; NOTHING fires while no popup is open.
+
+-- Word-aware keyword match: "pick" hits "PICK!" but never "pickup"; "rage" never hits "storage"; allows plural "s".
+local function pbHasKeyword(t, kw)
+    local i = string.find(t, kw, 1, true)
+    while i do
+        local after = string.sub(t, i + #kw, i + #kw)
+        local before = (i > 1) and string.sub(t, i - 1, i - 1) or ""
+        local okAfter = (after == "") or (after == "s") or (string.find(after, "^[^%a]$") ~= nil)
+        local okBefore = (before == "") or (string.find(before, "^%a") == nil)
+        if okAfter and okBefore then return true end
+        i = string.find(t, kw, i + 1, true)
+    end
+    return false
+end
+
+-- User priority table (points = 11 - rank; additive, one count per rank)
+local PB_UPGRADE_PRIORITY = {
+    { pts = 10, kws = { "rage", "spirit", "spirits" } },
+    { pts = 9,  kws = { "capacity" } },
+    { pts = 8,  kws = { "stamina" } },
+    { pts = 7,  kws = { "flame", "flames" } },
+    { pts = 6,  kws = { "life steal", "lifesteal", "steal", "steals" } },
+    { pts = 5,  kws = { "poison" } },
+    { pts = 4,  kws = { "frost", "element circle", "circle" } },
+    { pts = 3,  kws = { "recovery", "critical", "crit" } },
+    { pts = 2,  kws = { "health", "agility" } },
+    { pts = 1,  kws = { "thorn", "thorns" } },
+}
+
+local function pbScoreCardText(txt)
+    local score = 0
+    for _, tier in ipairs(PB_UPGRADE_PRIORITY) do
+        local hit = false
+        for _, kw in ipairs(tier.kws) do
+            if pbHasKeyword(txt, kw) then
+                hit = true
+                break
+            end
+        end
+        if hit then
+            score = score + tier.pts
+        end
+    end
+    if pbHasKeyword(txt, "potion") then
+        score = score - 5
+    end
+    if string.find(txt, "reroll", 1, true) or string.find(txt, "robux", 1, true) or string.find(txt, "shop", 1, true) then
+        score = -1000
+    end
+    return score
+end
+
+local PB_PICK_KWS = { "pick", "choose", "select" } -- "take/confirm" removed on purpose: avoid false popup when shop UI is open
+
+local function pbClickUpgradePick(btn, attempt)
     if not btn or not btn.Parent then return false end
     local clicked = false
+    -- Layer 1: fireclick (executor-level, ignores occlusion & inset entirely)
     pcall(function()
         if fireclick then
             fireclick(btn)
             clicked = true
         end
     end)
+    -- Layer 2: REAL VirtualInput touch click — alternate with/without GuiInset on every attempt
     pcall(function()
         if VirtualInputManager then
             local inset = GuiService:GetGuiInset()
             local pos = btn.AbsolutePosition
             local sz = btn.AbsoluteSize
             local cx = math.floor(pos.X + sz.X * 0.5)
-            local cyNoInset = math.floor(pos.Y + sz.Y * 0.5)
-            local cy = cyNoInset + inset.Y
-            -- Only click physically when the Hub panel does not cover the button (fireclick already covered it)
+            local cyRaw = math.floor(pos.Y + sz.Y * 0.5)
+            local useInset = ((attempt % 2) == 1)
+            local cy = cyRaw + (useInset and math.floor(inset.Y) or 0)
             local covered = false
             local mf = State.HubMainFrame
             if mf and mf.Parent and mf.Visible then
                 local mPos = mf.AbsolutePosition
                 local mSz = mf.AbsoluteSize
-                if cx >= mPos.X and cx <= (mPos.X + mSz.X) and cyNoInset >= mPos.Y and cyNoInset <= (mPos.Y + mSz.Y) then
+                if cx >= mPos.X and cx <= (mPos.X + mSz.X) and cyRaw >= mPos.Y and cyRaw <= (mPos.Y + mSz.Y) then
                     covered = true
                 end
             end
@@ -3548,27 +3603,26 @@ local function pbClickUpgradePick(btn)
             end
         end
     end)
+    -- Layer 3: touchTap directly on the object (from 2nd attempt)
+    pcall(function()
+        if touchTap and attempt >= 2 then
+            touchTap(btn, true)
+            task.wait(0.05)
+            touchTap(btn, false)
+            clicked = true
+        end
+    end)
+    -- Layer 4: firesignal the click event (from 3rd attempt, last resort)
+    pcall(function()
+        if firesignal and attempt >= 3 and btn:IsA("GuiButton") then
+            firesignal(btn.MouseButton1Click)
+            clicked = true
+        end
+    end)
     return clicked
 end
 
-local PB_PICK_TEXTS = { "pick", "choose", "select" }
-
-local function pbScoreCardText(txt)
-    if string.find(txt, "overhead", 1, true) then return 100 end
-    if string.find(txt, "crit", 1, true) then return 80 end
-    for _, kw in ipairs({ "damage", "dmg", "attack", "m1", "frost", "element", "fire", "lightning", "strength", "speed", "might", "swing" }) do
-        if string.find(txt, kw, 1, true) then return 50 end
-    end
-    for _, kw in ipairs({ "potion", "heal", "regen", "revive", "lifesteal" }) do
-        if string.find(txt, kw, 1, true) then return -100 end
-    end
-    if string.find(txt, "health", 1, true) or string.find(txt, "armor", 1, true) or string.find(txt, "defen", 1, true) then
-        return 10
-    end
-    return 0
-end
-
--- Returns a left-to-right list { { btn = GuiButton, score = n }, ... } (>=2 entries) while the popup is OPEN, else nil.
+-- Collect visible PICK buttons (own text OR child label text OR name). Needs >=2 (three-card popup).
 local function pbFindUpgradePicks()
     local picks = {}
     pcall(function()
@@ -3577,37 +3631,43 @@ local function pbFindUpgradePicks()
                 for _, d in ipairs(gui:GetDescendants()) do
                     if d:IsA("GuiButton") and isGuiVisible(d) then
                         local sz = d.AbsoluteSize
-                        if sz.X >= 40 and sz.Y >= 16 then
-                            local own = ""
+                        if sz.X >= 40 and sz.Y >= 14 then
+                            local btnText = ""
                             if d:IsA("TextButton") then
-                                own = string.gsub(string.lower(d.Text or ""), "%s", "")
+                                btnText = string.lower(d.Text or "")
                             end
+                            local childText = ""
+                            for _, sub in ipairs(d:GetDescendants()) do
+                                if (sub:IsA("TextLabel") or sub:IsA("TextBox")) and sub.Text then
+                                    childText = childText .. " " .. string.lower(sub.Text)
+                                end
+                            end
+                            local nameText = string.lower(d.Name or "")
                             local isPick = false
-                            for _, kw in ipairs(PB_PICK_TEXTS) do
-                                if own == kw then
+                            for _, kw in ipairs(PB_PICK_KWS) do
+                                if pbHasKeyword(btnText, kw) or pbHasKeyword(childText, kw) or pbHasKeyword(nameText, kw) then
                                     isPick = true
                                     break
                                 end
                             end
                             if isPick then
-                                local cardText = ""
+                                local cardText = btnText .. " " .. childText .. " " .. nameText
                                 local anc = d.Parent
                                 for _ = 1, 4 do
                                     if anc then
                                         for _, sib in ipairs(anc:GetChildren()) do
-                                            if sib:IsA("TextLabel") or sib:IsA("TextBox") then
+                                            if sib ~= d and (sib:IsA("TextLabel") or sib:IsA("TextBox")) then
                                                 cardText = cardText .. " " .. string.lower(sib.Text or "")
+                                            end
+                                            if sib:IsA("ImageLabel") then
+                                                cardText = cardText .. " " .. string.lower(sib.Name or "")
                                             end
                                         end
                                         cardText = cardText .. " " .. string.lower(anc.Name or "")
                                         anc = anc.Parent
                                     end
                                 end
-                                local score = pbScoreCardText(cardText)
-                                if string.find(cardText, "reroll", 1, true) or string.find(cardText, "robux", 1, true) then
-                                    score = -1000
-                                end
-                                table.insert(picks, { btn = d, score = score, x = d.AbsolutePosition.X })
+                                table.insert(picks, { btn = d, score = pbScoreCardText(cardText), x = d.AbsolutePosition.X })
                             end
                         end
                     end
@@ -3622,12 +3682,13 @@ end
 
 task.spawn(function()
     local lastScanTick2C = 0
-    local lastPickTick2C = 0
+    local pickAttempts = 0
     while State.Running do
         task.wait(0.25)
         pcall(function()
             if not Config.PB_AutoUpgrade then
                 State.PB_UpgradePopupOpen = false
+                pickAttempts = 0
                 return
             end
 
@@ -3636,66 +3697,60 @@ task.spawn(function()
             local sBlur = Lighting:FindFirstChild("screenBlur")
             if sBlur and sBlur.Size ~= 0 then sBlur.Size = 0 end
 
-            -- Keep the popup on-screen if an old config hid it away (Y = -1.1)
             local gameUI = PlayerGui:FindFirstChild("gameUI")
             local upgFrame = gameUI and gameUI:FindFirstChild("upgradeFrame")
             if upgFrame and not Config.PB_HideUpgradePopup and upgFrame.Position.Y.Scale < -0.2 then
                 upgFrame.Position = UDim2.new(0, 0, 0, 0)
             end
 
-            -- Throttled scan (max ~2x per second) — cheap & zero lag, works even though the game pauses the run
             local now = tick()
             if (now - lastScanTick2C) < 0.45 then return end
             lastScanTick2C = now
 
             local picks = pbFindUpgradePicks()
             State.PB_UpgradePopupOpen = picks ~= nil
-            State.PB_LastUpgradeScanTick = now
 
             if picks then
+                pickAttempts = pickAttempts + 1
+
                 local bestI = 1
                 for i = 1, #picks do
                     if picks[i].score > picks[bestI].score then
                         bestI = i
                     end
                 end
-                -- If the winner is an all-potion/vetoed set, just clear the popup via the first card (never stall!)
-                if picks[bestI].score <= -100 then
+                if picks[bestI].score <= -1000 and picks[1].score > -1000 then
                     bestI = 1
                 end
 
-                if (now - lastPickTick2C) >= 0.5 then
-                    lastPickTick2C = now
-                    local chosenBtn = picks[bestI].btn
-                    local chosenIndex = math.clamp(bestI, 1, 3)
+                local chosenBtn = picks[bestI].btn
+                local chosenIndex = math.clamp(bestI, 1, 3)
 
-                    -- 1) fireclick + real touch click on the actual PICK button (works on the current UI!)
-                    State.PB_M1ClickInFlight = true
-                    pbClickUpgradePick(chosenBtn)
-                    task.wait(0.05)
-                    State.PB_M1ClickInFlight = false
+                State.PB_M1ClickInFlight = true
+                pbClickUpgradePick(chosenBtn, pickAttempts)
+                task.wait(0.05)
+                State.PB_M1ClickInFlight = false
 
-                    -- 2) Slot hotkey (One/Two/Three) for builds that support keyboard selection
-                    if VirtualInputManager then
-                        pcall(function()
-                            local keyToSend = (chosenIndex == 1 and Enum.KeyCode.One) or (chosenIndex == 3 and Enum.KeyCode.Three) or Enum.KeyCode.Two
-                            VirtualInputManager:SendKeyEvent(true, keyToSend, false, game)
-                            task.wait(0.03)
-                            VirtualInputManager:SendKeyEvent(false, keyToSend, false, game)
-                        end)
-                    end
-
-                    -- 3) Legacy plrUpgrade remote (older builds; harmless no-op on the new banner UI)
-                    local pbRemotes = getPBRemotes()
-                    local upgRemote = pbRemotes and pbRemotes:FindFirstChild("plrUpgrade")
-                    if upgRemote then
-                        pcall(function()
-                            upgRemote:FireServer(chosenIndex)
-                        end)
-                    end
-
-                    State.PB_DungeonStatusText = "⬆️ تم اختيار الترقية تلقائياً (البطاقة " .. tostring(chosenIndex) .. " — أولوية Overhead ثم Crit)"
+                if VirtualInputManager then
+                    pcall(function()
+                        local keyToSend = (chosenIndex == 1 and Enum.KeyCode.One) or (chosenIndex == 3 and Enum.KeyCode.Three) or Enum.KeyCode.Two
+                        VirtualInputManager:SendKeyEvent(true, keyToSend, false, game)
+                        task.wait(0.03)
+                        VirtualInputManager:SendKeyEvent(false, keyToSend, false, game)
+                    end)
                 end
+
+                local pbRemotes = getPBRemotes()
+                local upgRemote = pbRemotes and pbRemotes:FindFirstChild("plrUpgrade")
+                if upgRemote then
+                    pcall(function()
+                        upgRemote:FireServer(chosenIndex)
+                    end)
+                end
+
+                State.PB_DungeonStatusText = "⬆️ نقر PICK (محاولة " .. tostring(pickAttempts) .. ") — البطاقة " .. tostring(chosenIndex) .. " حسب أولويتك"
+            else
+                pickAttempts = 0
             end
         end)
     end
@@ -4902,8 +4957,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v5.6 | Pixel Blade [Auto PICK Clicker + Hit-Lock + FPS Boost]"
-    or "⚔️ Delta Hub v5.6 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v5.7 | Pixel Blade [Auto PICK Clicker + Hit-Lock + FPS Boost]"
+    or "⚔️ Delta Hub v5.7 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5272,7 +5327,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.6 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.7 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
