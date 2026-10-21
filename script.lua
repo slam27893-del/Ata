@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v5.5 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v5.6 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v5.5)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v5.6)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -733,6 +733,10 @@ local function smartClickButton(btn, offsetX, offsetY)
 
     return clicked
 end
+
+-- v5.6 FIX: activateGuiButton was called from the fishing/quest loops but never defined (silent nil-call inside pcall).
+-- Alias it to the proven 3-layer clicker now.
+local activateGuiButton = smartClickButton
 
 --//===========================================================================
 --// ⚔️ GAME 1 MODULE: ATTACK ON TITAN: REVOLUTION (AOT:R)
@@ -3497,35 +3501,113 @@ task.spawn(function()
     end
 end)
 
--- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v5.5 — WORKS EVEN IF POPUP PATH CHANGES!)
--- v5.3 BUG (why it still failed): everything was gated behind "upgradeFrame visible & size>40" — when the mobile
--- popup reports a 0-size/renamed frame the loop NEVER fired plrUpgrade at all. Neverlose fires the remote constantly
--- and it always works. v5.5 RULES: (a) fire plrUpgrade every cycle (server ignores it while nothing is pending),
--- (b) 1Hz PlayerGui-wide card scan gives Overhead/Damage priority + real slot index + veto Potion/Heal cards,
--- (c) card click + correct One/Two/Three key only when a card was actually found. ZERO extra lag (GUI scan 1x/s).
-local PB_UPG_BAD_KW = { "reroll", "robux", "skip", "close", "exit", "buy", "purchase" }
-local PB_UPG_POTION_KW = { "potion", "heal", "regen", "revive", "lifesteal", "vamp" }
-local PB_UPG_DMG_KW = { "damage", "dmg", "attack", "m1", "strength", "critical", "might", "speed" }
-local PB_UPG_FRAMES_KW = { "upgrade", "pickcard", "cardframe", "chooseupgrade" }
+-- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v5.6 — REAL "PICK" BUTTON CLICKER for the Level-Up/Choose-Banner popup!)
+-- WHY v5.5 STILL FAILED (proven by the user's screenshot of the popup): the current Level-Up screen is the
+-- "CHOOSE BANNER" UI — three scroll cards (e.g. HEALTH BOOST I / FROST ELEMENT / CRITICAL BOOST) each with its own
+-- "PICK" TextButton. v5.5 scanned upgradeFrame card buttons, sent 1/2/3 keys and fired plrUpgrade blindly, AND
+-- early-returned whenever the game pauses the run during the popup (inCutscene=true) — so NOTHING was ever clicked.
+-- v5.6 RULES: scan PlayerGui (0.45s throttle = zero lag) for the visible PICK buttons themselves, score each card by
+-- its scroll text (Overhead #1 -> Crit #2 -> Damage/Elements #3; Potion/Heal vetoed; no middle-card defaults),
+-- then click the chosen PICK button via fireclick + REAL VirtualInput touch click at its exact center (plus key +
+-- legacy remote for older builds). While the popup is open the Auto-Clicker swings & farm movement pause
+-- (State.PB_UpgradePopupOpen) so nothing fights the selection. When no popup: NOTHING fires (no side effects!).
+local function pbClickUpgradePick(btn)
+    if not btn or not btn.Parent then return false end
+    local clicked = false
+    pcall(function()
+        if fireclick then
+            fireclick(btn)
+            clicked = true
+        end
+    end)
+    pcall(function()
+        if VirtualInputManager then
+            local inset = GuiService:GetGuiInset()
+            local pos = btn.AbsolutePosition
+            local sz = btn.AbsoluteSize
+            local cx = math.floor(pos.X + sz.X * 0.5)
+            local cyNoInset = math.floor(pos.Y + sz.Y * 0.5)
+            local cy = cyNoInset + inset.Y
+            -- Only click physically when the Hub panel does not cover the button (fireclick already covered it)
+            local covered = false
+            local mf = State.HubMainFrame
+            if mf and mf.Parent and mf.Visible then
+                local mPos = mf.AbsolutePosition
+                local mSz = mf.AbsoluteSize
+                if cx >= mPos.X and cx <= (mPos.X + mSz.X) and cyNoInset >= mPos.Y and cyNoInset <= (mPos.Y + mSz.Y) then
+                    covered = true
+                end
+            end
+            if not covered then
+                VirtualInputManager:SendMouseMoveEvent(cx, cy, game)
+                task.wait(0.02)
+                VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+                task.wait(0.03)
+                VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+                clicked = true
+            end
+        end
+    end)
+    return clicked
+end
 
-local function pbFindUpgradeCard()
-    local bestBtn, bestScore, bestSlot = nil, -math.huge, nil
-    local candidateFrames = {}
+local PB_PICK_TEXTS = { "pick", "choose", "select" }
 
+local function pbScoreCardText(txt)
+    if string.find(txt, "overhead", 1, true) then return 100 end
+    if string.find(txt, "crit", 1, true) then return 80 end
+    for _, kw in ipairs({ "damage", "dmg", "attack", "m1", "frost", "element", "fire", "lightning", "strength", "speed", "might", "swing" }) do
+        if string.find(txt, kw, 1, true) then return 50 end
+    end
+    for _, kw in ipairs({ "potion", "heal", "regen", "revive", "lifesteal" }) do
+        if string.find(txt, kw, 1, true) then return -100 end
+    end
+    if string.find(txt, "health", 1, true) or string.find(txt, "armor", 1, true) or string.find(txt, "defen", 1, true) then
+        return 10
+    end
+    return 0
+end
+
+-- Returns a left-to-right list { { btn = GuiButton, score = n }, ... } (>=2 entries) while the popup is OPEN, else nil.
+local function pbFindUpgradePicks()
+    local picks = {}
     pcall(function()
         for _, gui in ipairs(PlayerGui:GetChildren()) do
             if gui ~= State.HubScreenGui and gui:IsA("ScreenGui") and gui.Enabled then
-                local lowG = string.lower(gui.Name)
-                if string.find(lowG, "upgrade", 1, true) then
-                    table.insert(candidateFrames, gui)
-                end
-                for _, desc in ipairs(gui:GetDescendants()) do
-                    if (desc:IsA("Frame") or desc:IsA("ScrollingFrame")) and isGuiVisible(desc) then
-                        local n = string.lower(desc.Name)
-                        for _, kw in ipairs(PB_UPG_FRAMES_KW) do
-                            if string.find(n, kw, 1, true) then
-                                table.insert(candidateFrames, desc)
-                                break
+                for _, d in ipairs(gui:GetDescendants()) do
+                    if d:IsA("GuiButton") and isGuiVisible(d) then
+                        local sz = d.AbsoluteSize
+                        if sz.X >= 40 and sz.Y >= 16 then
+                            local own = ""
+                            if d:IsA("TextButton") then
+                                own = string.gsub(string.lower(d.Text or ""), "%s", "")
+                            end
+                            local isPick = false
+                            for _, kw in ipairs(PB_PICK_TEXTS) do
+                                if own == kw then
+                                    isPick = true
+                                    break
+                                end
+                            end
+                            if isPick then
+                                local cardText = ""
+                                local anc = d.Parent
+                                for _ = 1, 4 do
+                                    if anc then
+                                        for _, sib in ipairs(anc:GetChildren()) do
+                                            if sib:IsA("TextLabel") or sib:IsA("TextBox") then
+                                                cardText = cardText .. " " .. string.lower(sib.Text or "")
+                                            end
+                                        end
+                                        cardText = cardText .. " " .. string.lower(anc.Name or "")
+                                        anc = anc.Parent
+                                    end
+                                end
+                                local score = pbScoreCardText(cardText)
+                                if string.find(cardText, "reroll", 1, true) or string.find(cardText, "robux", 1, true) then
+                                    score = -1000
+                                end
+                                table.insert(picks, { btn = d, score = score, x = d.AbsolutePosition.X })
                             end
                         end
                     end
@@ -3533,170 +3615,93 @@ local function pbFindUpgradeCard()
             end
         end
     end)
-
-    local gameUI = PlayerGui:FindFirstChild("gameUI")
-    local upgFrame = gameUI and gameUI:FindFirstChild("upgradeFrame")
-    if upgFrame then
-        table.insert(candidateFrames, upgFrame)
-    end
-
-    for _, fr in ipairs(candidateFrames) do
-        local items = {}
-        pcall(function()
-            for _, d in ipairs(fr:GetDescendants()) do
-                if d:IsA("GuiButton") and isGuiVisible(d) then
-                    local sz = d.AbsoluteSize
-                    if sz.X >= 18 and sz.Y >= 18 then
-                        local txt = string.lower(d.Name)
-                        if d:IsA("TextButton") and d.Text then
-                            txt = txt .. " " .. string.lower(d.Text)
-                        end
-                        if d.Parent then
-                            txt = txt .. " " .. string.lower(d.Parent.Name)
-                            if d.Parent.Parent then
-                                txt = txt .. " " .. string.lower(d.Parent.Parent.Name)
-                            end
-                        end
-                        for _, sub in ipairs(d:GetDescendants()) do
-                            if (sub:IsA("TextLabel") or sub:IsA("TextBox")) and sub.Text then
-                                txt = txt .. " " .. string.lower(sub.Text)
-                            end
-                        end
-                        local bad = false
-                        for _, kw in ipairs(PB_UPG_BAD_KW) do
-                            if string.find(txt, kw, 1, true) then
-                                bad = true
-                                break
-                            end
-                        end
-                        if not bad then
-                            local score = 0
-                            if string.find(txt, "overhead", 1, true) then
-                                score = 100
-                            else
-                                for _, kw in ipairs(PB_UPG_DMG_KW) do
-                                    if string.find(txt, kw, 1, true) then
-                                        score = 50
-                                        break
-                                    end
-                                end
-                            end
-                            for _, kw in ipairs(PB_UPG_POTION_KW) do
-                                if string.find(txt, kw, 1, true) then
-                                    score = -100
-                                    break
-                                end
-                            end
-                            table.insert(items, { btn = d, x = d.AbsolutePosition.X, score = score })
-                        end
-                    end
-                end
-            end
-        end)
-        if #items >= 2 then
-            table.sort(items, function(a, b) return a.x < b.x end)
-            local pickIdx = 1
-            for i, it in ipairs(items) do
-                if it.score > items[pickIdx].score then
-                    pickIdx = i
-                end
-            end
-            -- Real on-screen slot index (left=1, middle=2, right=3). NEVER let the fallback default land on card 2
-            -- (middle) blindly; with no readable text we pick slot 1 (left) instead of v5.2 middle-potion bug!
-            local chosen = items[pickIdx]
-            local slot = math.clamp(chosen.score >= 0 and pickIdx or (pickIdx == 2 and 1 or pickIdx), 1, #items)
-            if chosen.score > bestScore then
-                bestScore = chosen.score
-                bestBtn = chosen.btn
-                bestSlot = slot
-            end
-        end
-    end
-
-    return bestBtn, bestSlot or nil
+    if #picks < 2 then return nil end
+    table.sort(picks, function(a, b) return a.x < b.x end)
+    return picks
 end
 
 task.spawn(function()
-    local lastScanTick, cachedCardBtn, cachedSlot = 0, nil, nil
-    local lastPickTick = 0
+    local lastScanTick2C = 0
+    local lastPickTick2C = 0
     while State.Running do
         task.wait(0.25)
         pcall(function()
-            if not Config.PB_AutoUpgrade then return end
+            if not Config.PB_AutoUpgrade then
+                State.PB_UpgradePopupOpen = false
+                return
+            end
 
             local dBlur = Lighting:FindFirstChild("deathBlur")
             if dBlur and dBlur.Size ~= 0 then dBlur.Size = 0 end
             local sBlur = Lighting:FindFirstChild("screenBlur")
             if sBlur and sBlur.Size ~= 0 then sBlur.Size = 0 end
 
-            -- Keep the popup on-screen (never at Y = -1.1) so card coordinates stay clickable
+            -- Keep the popup on-screen if an old config hid it away (Y = -1.1)
             local gameUI = PlayerGui:FindFirstChild("gameUI")
             local upgFrame = gameUI and gameUI:FindFirstChild("upgradeFrame")
             if upgFrame and not Config.PB_HideUpgradePopup and upgFrame.Position.Y.Scale < -0.2 then
                 upgFrame.Position = UDim2.new(0, 0, 0, 0)
             end
 
-            local cutscene = workspace:FindFirstChild("inCutscene")
-            if cutscene and cutscene.Value == true then return end
-
-            -- 1Hz card scan (cached) — cheap for FPS
+            -- Throttled scan (max ~2x per second) — cheap & zero lag, works even though the game pauses the run
             local now = tick()
-            if (now - lastScanTick) >= 1.0 then
-                lastScanTick = now
-                cachedCardBtn, cachedSlot = pbFindUpgradeCard()
-                if cachedCardBtn and not (cachedCardBtn.Parent and isGuiVisible(cachedCardBtn)) then
-                    cachedCardBtn = nil
+            if (now - lastScanTick2C) < 0.45 then return end
+            lastScanTick2C = now
+
+            local picks = pbFindUpgradePicks()
+            State.PB_UpgradePopupOpen = picks ~= nil
+            State.PB_LastUpgradeScanTick = now
+
+            if picks then
+                local bestI = 1
+                for i = 1, #picks do
+                    if picks[i].score > picks[bestI].score then
+                        bestI = i
+                    end
                 end
-            end
+                -- If the winner is an all-potion/vetoed set, just clear the popup via the first card (never stall!)
+                if picks[bestI].score <= -100 then
+                    bestI = 1
+                end
 
-            local pbRemotes = getPBRemotes()
-            local upgRemote = pbRemotes and pbRemotes:FindFirstChild("plrUpgrade")
-            local chosenIndex = cachedSlot or 1
-            local pickInterval = cachedCardBtn and 0.3 or 0.7
-            if (now - lastPickTick) < pickInterval then return end
-            lastPickTick = now
+                if (now - lastPickTick2C) >= 0.5 then
+                    lastPickTick2C = now
+                    local chosenBtn = picks[bestI].btn
+                    local chosenIndex = math.clamp(bestI, 1, 3)
 
-            -- (a) Fire plrUpgrade EVERY cycle like the proven Neverlose script (no-op while nothing is pending,
-            --     instant pick the moment an upgrade popup opens!)
-            if upgRemote then
-                upgRemote:FireServer(chosenIndex)
-            end
-
-            if VirtualInputManager then
-                -- (b) Correct hotkey for the chosen slot
-                local keyToSend = (chosenIndex == 1 and Enum.KeyCode.One)
-                    or (chosenIndex == 3 and Enum.KeyCode.Three)
-                    or Enum.KeyCode.Two
-                VirtualInputManager:SendKeyEvent(true, keyToSend, false, game)
-                task.wait(0.03)
-                VirtualInputManager:SendKeyEvent(false, keyToSend, false, game)
-
-                -- (c) Real touch click on the found card center (mobile popup works via physical click)
-                if cachedCardBtn and cachedCardBtn.Parent and not State.PB_M1ClickInFlight then
+                    -- 1) fireclick + real touch click on the actual PICK button (works on the current UI!)
                     State.PB_M1ClickInFlight = true
-                    pcall(function()
-                        local inset = GuiService:GetGuiInset()
-                        local pos = cachedCardBtn.AbsolutePosition
-                        local sz = cachedCardBtn.AbsoluteSize
-                        local cx = math.floor(pos.X + sz.X * 0.5)
-                        local cy = math.floor(pos.Y + sz.Y * 0.5 + inset.Y)
-                        VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
-                        task.wait(0.02)
-                        VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
-                    end)
+                    pbClickUpgradePick(chosenBtn)
+                    task.wait(0.05)
                     State.PB_M1ClickInFlight = false
-                    State.PB_DungeonStatusText = "⬆️ تم اختيار الترقية تلقائياً (أولوية Overhead، بدون بوشن)"
-                end
-            end
 
-            if Config.PB_HideUpgradePopup and upgFrame then
-                upgFrame.Position = UDim2.new(0, 0, -1.1, 0)
+                    -- 2) Slot hotkey (One/Two/Three) for builds that support keyboard selection
+                    if VirtualInputManager then
+                        pcall(function()
+                            local keyToSend = (chosenIndex == 1 and Enum.KeyCode.One) or (chosenIndex == 3 and Enum.KeyCode.Three) or Enum.KeyCode.Two
+                            VirtualInputManager:SendKeyEvent(true, keyToSend, false, game)
+                            task.wait(0.03)
+                            VirtualInputManager:SendKeyEvent(false, keyToSend, false, game)
+                        end)
+                    end
+
+                    -- 3) Legacy plrUpgrade remote (older builds; harmless no-op on the new banner UI)
+                    local pbRemotes = getPBRemotes()
+                    local upgRemote = pbRemotes and pbRemotes:FindFirstChild("plrUpgrade")
+                    if upgRemote then
+                        pcall(function()
+                            upgRemote:FireServer(chosenIndex)
+                        end)
+                    end
+
+                    State.PB_DungeonStatusText = "⬆️ تم اختيار الترقية تلقائياً (البطاقة " .. tostring(chosenIndex) .. " — أولوية Overhead ثم Crit)"
+                end
             end
         end)
     end
 end)
 
--- ======================= 🚀 v5.5 Auto FPS Boost (بدون أي خيار جديد — تلقائي) =======================
+-- ======================= 🚀 v5.5+ Auto FPS Boost (بدون أي خيار جديد — تلقائي) =======================
 -- يرفع الـ FPS في الجوال والكمبيوتر بدون أي إضافات على الواجهة: يطفئ الظلال وتأثيرات ما بعد المعالجة
 -- (Blur/Bloom/SunRays/Atmosphere) ويحط جودة التكس처 على الأدنى ويفتح حد الفريمات (PC فقط).
 -- تأثيرات رسومية محلية 100% — لا تمس القتال أو السيرفر ولا تسبب أي لاق. تعاد كل 12 ثانية لو رجعتها اللعبة.
@@ -3781,6 +3786,18 @@ task.spawn(function()
         task.wait(0.15)
         pcall(function()
             refreshCharacterRefs()
+
+            -- v5.6: freeze farm movement while the Level-Up popup is open so nothing fights the auto PICK click.
+            -- Staleness guard: if Loop 2C stopped refreshing, never stay frozen (max 3s pause).
+            if State.PB_UpgradePopupOpen and (tick() - (State.PB_LastUpgradeScanTick or 0)) > 3.0 then
+                State.PB_UpgradePopupOpen = false
+            end
+            if State.PB_UpgradePopupOpen then
+                State.PB_ActiveFollowMob = nil
+                State.PB_ActiveFollowPart = nil
+                State.PB_DungeonStatusText = "⏸️ توقف لحظي — جاري اختيار الترقية تلقائياً..."
+                return
+            end
 
             -- Continuously record current dungeon worldType & difficulty so Auto-Replay always replays the exact active dungeon!
             local wtObj = workspace:FindFirstChild("worldType")
@@ -4019,7 +4036,7 @@ task.spawn(function()
     while State.Running do
         task.wait(0.12)
         pcall(function()
-            if Config.PB_AutoClicker and HumanoidRootPart then
+            if Config.PB_AutoClicker and HumanoidRootPart and not State.PB_UpgradePopupOpen then
                 local cutscene = workspace:FindFirstChild("inCutscene")
                 if not (cutscene and cutscene.Value == true) then
                     pbPerformRealM1Attack()
@@ -4885,8 +4902,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v5.5 | Pixel Blade [Hit-Lock + Auto Upgrade + FPS Boost]"
-    or "⚔️ Delta Hub v5.5 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v5.6 | Pixel Blade [Auto PICK Clicker + Hit-Lock + FPS Boost]"
+    or "⚔️ Delta Hub v5.6 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5255,7 +5272,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.5 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.6 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
