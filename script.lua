@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v5.1 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v5.2 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: Anti-Boss-Cluster + Bring Mobs + Auto-Clicker v5.1)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield v5.2)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -304,12 +304,17 @@ local Config = {
     PB_KillAura = true,
     PB_KillAuraRange = 100,
     PB_GodBuffAndHeal = true,
+    PB_PlayerProtection = true,
     PB_AutoBreakables = true,
     PB_BringMobs = true,
     PB_ExpandHitbox = true,
-    PB_HitboxSize = 40,
+    PB_HitboxSize = 45,
     PB_AutoUpgrade = true,
-    PB_HideUpgradePopup = true,
+    PB_HideUpgradePopup = false,
+    PB_AutoReplayDungeon = true,
+    PB_LastDungeonWorld = "SunkenDepths",
+    PB_LastDungeonDiff = "Normal",
+    PB_MigratedV52 = false,
     PB_AutoOpenChests = true,
     PB_AutoOpenWishes = false,
     PB_AutoClaimQuests = true,
@@ -377,6 +382,17 @@ local function loadSavedConfig()
                 Config[k] = v
             end
         end
+        -- Migrate pre-v5.2 configs so HideUpgradePopup no longer moves upgradeFrame off-screen (-1.1)
+        -- and Auto Replay Dungeon + Player Protection are enabled by default
+        if not loadedTable.PB_MigratedV52 then
+            Config.PB_HideUpgradePopup = false
+            Config.PB_AutoUpgrade = true
+            Config.PB_AutoReplayDungeon = true
+            Config.PB_PlayerProtection = true
+            Config.PB_MigratedV52 = true
+        end
+    else
+        Config.PB_MigratedV52 = true
     end
 end
 
@@ -1758,7 +1774,7 @@ local function pbIsRangedEnemy(model)
     return isRanged
 end
 
--- Strict Step-by-Step Room-Wave Enemy Finder (v4.6 Anti-Boss-Jump + Healer/Drainer #1 Priority + Active Ranged #2 Priority):
+-- Strict Step-by-Step Room-Wave Enemy Finder (Exact Proven v4.6 Room Transitions + Healer/Drainer #1 + Ranged #2 Priority):
 -- 1. Living BookHand (Korth boss shield phase)
 -- 2. Active Enemies in CURRENT ROOM (hadEntrance == true within <= 95 studs, or active mob within <= 75 studs):
 --    - Priority 2A: Active Healer / Drainer with active Heal/Drain Beam or Tether FIRST!
@@ -1766,116 +1782,15 @@ end
 --    - Priority 2C: Active Ranged (Bow/Archer/Mage/Eyeball/Cannon) THIRD!
 --    - Priority 2D: Active Melee FOURTH!
 -- 3. ONLY when 100% of current-room enemies are dead:
---    - Distinguishes multi-enemy Normal Room waves (neighborCount >= 1 within 75 studs) from the single isolated
---      pre-spawned Boss sitting alone in the circular Boss Arena (neighborCount == 0 / high MaxHealth / PB_BOSS_NAMES).
+--    - Exact v4.6 wave-clustering: distinguishes multi-enemy Normal Room waves (neighborCount >= 1 within 75 studs)
+--      from the single isolated pre-spawned Boss sitting alone in the circular Boss Arena (neighborCount == 0 / high MaxHealth / PB_BOSS_NAMES).
 --    - ALWAYS steps into the closest Normal Room wave (Room 2 -> Room 3 -> Room 4) and NEVER targets the Boss Arena
 --      until 100% of normal room enemies in the chapter are dead!
--- Compute & Cache Exact 3D Bounding Box of a Dungeon Room Model/Folder ("1", "2", "3", "4", "5", ..., "BossRoom")
-local function getPBRoomBoundingBox(roomObj)
-    if not roomObj or not roomObj.Parent then return nil, nil end
-    State.PB_RoomBoxCache = State.PB_RoomBoxCache or {}
-    local cached = State.PB_RoomBoxCache[roomObj]
-    if cached and cached.cf and cached.size then
-        return cached.cf, cached.size
-    end
-
-    local cf, size = nil, nil
-    if roomObj:IsA("Model") then
-        local ok, bCF, bSz = pcall(function()
-            return roomObj:GetBoundingBox()
-        end)
-        if ok and bCF and bSz and bSz.Magnitude > 1 then
-            cf, size = bCF, bSz
-        end
-    end
-
-    if not cf or not size then
-        pcall(function()
-            local minX, minY, minZ = math.huge, math.huge, math.huge
-            local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
-            local foundPart = false
-            for _, d in ipairs(roomObj:GetDescendants()) do
-                if d:IsA("BasePart") then
-                    foundPart = true
-                    local p = d.Position
-                    local s = d.Size * 0.5
-                    if (p.X - s.X) < minX then minX = p.X - s.X end
-                    if (p.Y - s.Y) < minY then minY = p.Y - s.Y end
-                    if (p.Z - s.Z) < minZ then minZ = p.Z - s.Z end
-                    if (p.X + s.X) > maxX then maxX = p.X + s.X end
-                    if (p.Y + s.Y) > maxY then maxY = p.Y + s.Y end
-                    if (p.Z + s.Z) > maxZ then maxZ = p.Z + s.Z end
-                end
-            end
-            if foundPart then
-                local center = Vector3.new((minX + maxX) * 0.5, (minY + maxY) * 0.5, (minZ + maxZ) * 0.5)
-                cf = CFrame.new(center)
-                size = Vector3.new(math.max(maxX - minX, 10), math.max(maxY - minY, 10), math.max(maxZ - minZ, 10))
-            else
-                local piv = roomObj:GetPivot()
-                cf = piv
-                size = Vector3.new(60, 40, 60)
-            end
-        end)
-    end
-
-    if cf and size then
-        State.PB_RoomBoxCache[roomObj] = { cf = cf, size = size }
-    end
-    return cf, size
-end
-
--- Determine which Numbered Room ("1", "2", "3", "4", "5", ...) physically contains a 3D point using its 3D Bounding Box!
--- Uses outsideDist (0 when inside the room's 3D box) + normInside so huge circular Boss Arenas (Room "5") never steal Room "1"/"2" mobs!
-local function getPBPointRoomNumber(pos, roomBoxes)
-    if not pos or not roomBoxes then return nil end
-    local bestRoomNum = nil
-    local bestOutsideDist = 35.0
-    local bestNormInside = math.huge
-
-    for rNum, box in pairs(roomBoxes) do
-        if box and box.cf and box.size then
-            local localPos = box.cf:PointToObjectSpace(pos)
-            local halfX = math.max(box.size.X * 0.5, 8)
-            local halfY = math.max(box.size.Y * 0.5 + 30, 25)
-            local halfZ = math.max(box.size.Z * 0.5, 8)
-
-            if math.abs(localPos.Y) <= halfY then
-                local dx = math.max(0, math.abs(localPos.X) - halfX)
-                local dz = math.max(0, math.abs(localPos.Z) - halfZ)
-                local outsideDist = math.sqrt(dx * dx + dz * dz)
-                local normInside = math.max(math.abs(localPos.X) / halfX, math.abs(localPos.Z) / halfZ)
-
-                if outsideDist < (bestOutsideDist - 0.5) or (math.abs(outsideDist - bestOutsideDist) <= 0.5 and normInside < bestNormInside) then
-                    bestOutsideDist = outsideDist
-                    bestNormInside = normInside
-                    bestRoomNum = rNum
-                end
-            end
-        end
-    end
-
-    return bestRoomNum
-end
-
 local function findBestPBTarget(isRaid)
     refreshCharacterRefs()
     if not Character or not HumanoidRootPart then return nil, nil end
     local myPos = HumanoidRootPart.Position
     local now = tick()
-
-    -- Reset per-dungeon room tracking automatically whenever workspace["1"] changes (new dungeon started!)
-    local room1Obj = workspace:FindFirstChild("1")
-    if room1Obj ~= State.PB_LastRoom1Instance then
-        State.PB_LastRoom1Instance = room1Obj
-        State.PB_RoomBoxCache = {}
-        State.PB_VisitedNumberedRooms = {}
-        State.PB_CurrentRoomNum = 0
-        State.PB_LockedBossMobs = {}
-        State.PB_LockedRoomPositions = {}
-        State.PB_LockedMobIgnoreUntil = {}
-        State.PB_ActiveRoomAnchorPos = nil
-    end
 
     -- 1. If Korth spawned a living BookHand within 200 studs, kill BookHand first!
     local bhMob, bhPart = findAliveBookHand()
@@ -1893,40 +1808,16 @@ local function findBestPBTarget(isRaid)
     local maxNextRoomDist = isRaid and math.huge or ((sinceLastRoom >= 4.0) and 280 or 200)
 
     local bossRoomObj = workspace:FindFirstChild("BossRoom")
-    local bossRoomCF, _ = getPBRoomBoundingBox(bossRoomObj)
-    local bossRoomPos = bossRoomCF and bossRoomCF.Position or nil
-
-    -- Collect 3D Bounding Boxes for all numbered rooms ("1" .. "25") in workspace
-    local roomBoxes = {}
-    local maxRoomNumberInWorkspace = 0
-    if not isRaid then
-        for r = 1, 25 do
-            local rObj = workspace:FindFirstChild(tostring(r))
-            if rObj then
-                local rCF, rSz = getPBRoomBoundingBox(rObj)
-                if rCF and rSz then
-                    roomBoxes[r] = { obj = rObj, cf = rCF, size = rSz, pos = rCF.Position }
-                    if r > maxRoomNumberInWorkspace then
-                        maxRoomNumberInWorkspace = r
-                    end
-                end
-            end
-        end
+    local bossRoomPos = nil
+    if bossRoomObj then
+        pcall(function()
+            bossRoomPos = bossRoomObj:GetPivot().Position
+        end)
     end
-
-    -- Identify Chapter 1 Boss Room number based on difficulty (Normal = Room 5 before Campfire 6; Heroic = Room 6 before Campfire 7; Nightmare = Room 7 before Campfire 8)
-    local diffObj = workspace:FindFirstChild("difficulty")
-    local diffVal = diffObj and tostring(diffObj.Value) or "Normal"
-    local chapter1BossRoomNum = (diffVal == "Nightmare" and 7) or (diffVal == "Heroic" and 6) or 5
 
     local allModels = collectAllPBModels()
     State.PB_LockedMobIgnoreUntil = State.PB_LockedMobIgnoreUntil or {}
-    State.PB_LockedBossMobs = State.PB_LockedBossMobs or {}
-    State.PB_LockedRoomPositions = State.PB_LockedRoomPositions or {}
-    State.PB_VisitedNumberedRooms = State.PB_VisitedNumberedRooms or {}
     local lockedMap = State.PB_LockedMobIgnoreUntil
-    local lockedBossMobs = State.PB_LockedBossMobs
-    local lockedRoomPositions = State.PB_LockedRoomPositions
     local inactiveCandidates = {}
 
     for _, v in ipairs(allModels) do
@@ -1940,115 +1831,67 @@ local function findBestPBTarget(isRaid)
                 end
 
                 local mobPos = part.Position
-                pcall(function()
-                    mobPos = v:GetPivot().Position
-                end)
                 local distFromMe = (mobPos - myPos).Magnitude
                 local hadEnt = v:GetAttribute("hadEntrance")
-                local hum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
-                local maxHP = (hum and hum.MaxHealth and hum.MaxHealth > 0) and hum.MaxHealth or 100
-                local curHP = getPBMobCurrentHP(v)
-                if curHP > maxHP then
-                    maxHP = curHP
+                local ignoreUntil = lockedMap[v]
+
+                -- If an enemy's room has now opened (hadEntrance == true), clear any temporary lock!
+                if hadEnt == true then
+                    lockedMap[v] = nil
                 end
 
-                local bestRoomNum = (not isRaid) and getPBPointRoomNumber(mobPos, roomBoxes) or nil
-                local isBossName = PB_BOSS_NAMES[v.Name] == true
-                local inBossRoom = (bossRoomPos and (mobPos - bossRoomPos).Magnitude <= 95) or false
+                if hadEnt == true or not ignoreUntil or now >= ignoreUntil then
+                    local isBossName = PB_BOSS_NAMES[v.Name] == true
+                    local inBossRoom = (bossRoomPos and (mobPos - bossRoomPos).Magnitude <= 95) or false
+                    local hum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
+                    local maxHP = (hum and hum.MaxHealth and hum.MaxHealth > 0) and hum.MaxHealth or 100
 
-                -- Check if this unactivated mob (or its 80-stud room cluster) was already detected as a locked Boss/future room!
-                -- IMPORTANT: Check hadEnt ~= true (covers BOTH hadEnt == false AND hadEnt == nil!)
-                local isLockedBoss = false
-                if not isRaid and hadEnt ~= true then
-                    if lockedBossMobs[v] then
-                        isLockedBoss = true
-                    else
-                        local ignoreUntil = lockedMap[v]
-                        if ignoreUntil and now < ignoreUntil then
-                            isLockedBoss = true
-                        else
-                            for _, lPos in ipairs(lockedRoomPositions) do
-                                if (mobPos - lPos).Magnitude <= 80 then
-                                    isLockedBoss = true
-                                    break
-                                end
-                            end
-                        end
-                    end
-                elseif hadEnt == true then
-                    -- Once an enemy's room genuinely activates (hadEntrance == true), unlock it!
-                    lockedBossMobs[v] = nil
-                end
-
-                -- Stage 1: Enemies in the CURRENT active room!
-                -- STRICT CHECK: In Dungeon mode, an enemy is in the current open room ONLY when hadEnt == true (within <= 95 studs),
-                -- OR when hadEnt == nil (not false), not a Boss/locked room, and has ALREADY taken damage (curHP < maxHP) within <= 65 studs!
-                -- This prevents any unactivated Boss or Boss minion with hadEnt == false/nil across the wall from ever entering Stage 1!
-                local isCurrentActiveRoomMob = isRaid
-                    or (v:FindFirstChild("worm") ~= nil)
-                    or (v.Name == "BookHand")
-                    or (hadEnt == true and distFromMe <= 95 and not isLockedBoss)
-                    or (hadEnt == nil and not isBossName and not inBossRoom and not isLockedBoss and curHP < maxHP and distFromMe <= 65)
-
-                if isCurrentActiveRoomMob then
-                    -- Only record PB_LastActiveRoomPos for genuinely activated (hadEnt == true) non-Boss rooms so it NEVER points to a locked Boss Arena!
-                    if hadEnt == true and not isBossName and not inBossRoom and not isLockedBoss then
+                    -- Stage 1: Enemies in the CURRENT active room (hadEntrance == true within <= 95 studs, or active non-Boss within <= 75 studs)
+                    if isRaid or v:FindFirstChild("worm") or (hadEnt == true and distFromMe <= 95) or (hadEnt ~= false and not isBossName and not inBossRoom and distFromMe <= 75) then
                         State.PB_LastActiveRoomPos = mobPos
                         State.PB_LastActiveRoomTime = now
-                        if bestRoomNum then
-                            State.PB_VisitedNumberedRooms[bestRoomNum] = true
-                            if bestRoomNum > (State.PB_CurrentRoomNum or 0) then
-                                State.PB_CurrentRoomNum = bestRoomNum
-                            end
+                        if isBossName or inBossRoom then
+                            State.PB_FoughtBossInSession = true
                         end
-                        -- If we entered and started fighting a brand-new active room (> 65 studs from previous active room),
-                        -- unlock previously deferred Bosses so they can be fought once all normal rooms are cleared!
-                        if not State.PB_ActiveRoomAnchorPos or (mobPos - State.PB_ActiveRoomAnchorPos).Magnitude > 65 then
-                            State.PB_ActiveRoomAnchorPos = mobPos
-                            State.PB_LockedBossMobs = {}
-                            State.PB_LockedRoomPositions = {}
-                        end
-                    end
 
-                    if not isBossName and pbHasActiveHealOrDrainBeam(v) and distFromMe < currentBeamDist then
-                        currentBeamDist = distFromMe
-                        currentBeamMob = v
-                        currentBeamPart = part
+                        if not isBossName and pbHasActiveHealOrDrainBeam(v) and distFromMe < currentBeamDist then
+                            currentBeamDist = distFromMe
+                            currentBeamMob = v
+                            currentBeamPart = part
+                        end
+                        if not isBossName and pbIsHealerOrDrainerEnemy(v) and distFromMe < currentHealerDist then
+                            currentHealerDist = distFromMe
+                            currentHealerMob = v
+                            currentHealerPart = part
+                        end
+                        if pbIsRangedEnemy(v) and not isBossName and distFromMe < currentRangedDist then
+                            currentRangedDist = distFromMe
+                            currentRangedMob = v
+                            currentRangedPart = part
+                        end
+                        if hadEnt == true and distFromMe < currentActiveDist then
+                            currentActiveDist = distFromMe
+                            currentActiveMob = v
+                            currentActivePart = part
+                        end
+                        if distFromMe < currentRoomDist then
+                            currentRoomDist = distFromMe
+                            currentRoomMob = v
+                            currentRoomPart = part
+                        end
+                    else
+                        -- Candidate waiting in an unentered room (hadEntrance == false) or farther away
+                        table.insert(inactiveCandidates, {
+                            mob = v,
+                            part = part,
+                            pos = mobPos,
+                            dist = distFromMe,
+                            hadEnt = hadEnt,
+                            maxHP = maxHP,
+                            isBossName = isBossName,
+                            inBossRoom = inBossRoom
+                        })
                     end
-                    if not isBossName and pbIsHealerOrDrainerEnemy(v) and distFromMe < currentHealerDist then
-                        currentHealerDist = distFromMe
-                        currentHealerMob = v
-                        currentHealerPart = part
-                    end
-                    if pbIsRangedEnemy(v) and not isBossName and distFromMe < currentRangedDist then
-                        currentRangedDist = distFromMe
-                        currentRangedMob = v
-                        currentRangedPart = part
-                    end
-                    if hadEnt == true and distFromMe < currentActiveDist then
-                        currentActiveDist = distFromMe
-                        currentActiveMob = v
-                        currentActivePart = part
-                    end
-                    if distFromMe < currentRoomDist then
-                        currentRoomDist = distFromMe
-                        currentRoomMob = v
-                        currentRoomPart = part
-                    end
-                else
-                    -- Candidate waiting in an unentered room (hadEntrance ~= true) or farther away
-                    table.insert(inactiveCandidates, {
-                        mob = v,
-                        part = part,
-                        pos = mobPos,
-                        dist = distFromMe,
-                        hadEnt = hadEnt,
-                        maxHP = maxHP,
-                        isBossName = isBossName,
-                        inBossRoom = inBossRoom,
-                        isLockedBoss = isLockedBoss,
-                        roomNum = bestRoomNum
-                    })
                 end
             end
         end
@@ -2061,97 +1904,47 @@ local function findBestPBTarget(isRaid)
     if currentActiveMob then return currentActiveMob, currentActivePart end
     if currentRoomMob then return currentRoomMob, currentRoomPart end
 
-    -- 2. Current room is 100% cleared -> analyze remaining unentered rooms (hadEntrance ~= true)
+    -- 2. Current room is 100% cleared -> analyze remaining unentered rooms (hadEntrance == false)
     if #inactiveCandidates == 0 then
         return nil, nil
     end
 
-    -- Determine whether earlier normal rooms (1 .. chapter1BossRoomNum - 1) have all been visited yet
-    local hasUnvisitedNormalRoomBeforeCh1Boss = false
-    for r = 1, (chapter1BossRoomNum - 1) do
-        if roomBoxes[r] and not State.PB_VisitedNumberedRooms[r] then
-            hasUnvisitedNormalRoomBeforeCh1Boss = true
-            break
-        end
-    end
-
     local minInactiveMaxHP = math.huge
     for _, c in ipairs(inactiveCandidates) do
-        if not c.isBossName and not c.inBossRoom and not c.isLockedBoss and c.maxHP < minInactiveMaxHP then
+        if c.maxHP < minInactiveMaxHP then
             minInactiveMaxHP = c.maxHP
         end
     end
-    if minInactiveMaxHP == math.huge then
-        for _, c in ipairs(inactiveCandidates) do
-            if c.maxHP < minInactiveMaxHP then
-                minInactiveMaxHP = c.maxHP
-            end
-        end
-    end
 
-    -- Step 2A: Identify Boss Anchors (by name, BossRoom, LockedBoss memory, Chapter Boss Room number, or MaxHealth > 1.35x normal mob HP!)
-    local bossAnchorPositions = {}
-    for _, c in ipairs(inactiveCandidates) do
-        local isHighHPBoss = (#inactiveCandidates >= 2) and (c.maxHP > (minInactiveMaxHP * 1.35))
-        local isEarlyCh1BossRoom = (c.roomNum == chapter1BossRoomNum and hasUnvisitedNormalRoomBeforeCh1Boss)
-        local isFinalNumberedRoom = (maxRoomNumberInWorkspace >= 5 and c.roomNum == maxRoomNumberInWorkspace and #inactiveCandidates >= 2)
-        if c.isBossName or c.inBossRoom or c.isLockedBoss or isHighHPBoss or isEarlyCh1BossRoom or isFinalNumberedRoom then
-            c.isBossAnchor = true
-            table.insert(bossAnchorPositions, c.pos)
-        end
-    end
-
-    -- Step 2B: Mark any minion/model within 65 studs of a Boss Anchor as part of the Boss Arena cluster
-    -- (prevents picking the smaller purple minion right next to InfestedBeast inside the Boss Arena!)
+    -- Count how many other inactive enemies are in the SAME room wave (within 75 studs) for each candidate.
+    -- Normal rooms spawn a wave of 2..8 enemies together (neighborCount >= 1).
+    -- The circular Boss Arena next to Room 1 has ONLY 1 Boss sitting alone (neighborCount == 0 and higher MaxHealth)!
     local hasAnyNormalWave = false
     for i, c in ipairs(inactiveCandidates) do
-        if not c.isBossAnchor then
-            for _, bPos in ipairs(bossAnchorPositions) do
-                if (c.pos - bPos).Magnitude <= 65 then
-                    c.inBossCluster = true
-                    break
-                end
-            end
-        end
-
-        -- Count tight same-room neighbors (within 48 studs, excluding Boss Arena models)
         local neighbors = 0
         for j, other in ipairs(inactiveCandidates) do
-            if i ~= j and not other.isBossAnchor and not other.inBossCluster and (c.pos - other.pos).Magnitude <= 48 then
+            if i ~= j and (c.pos - other.pos).Magnitude <= 75 then
                 neighbors = neighbors + 1
             end
         end
         c.neighbors = neighbors
-        if neighbors >= 1 and not c.isBossAnchor and not c.inBossCluster then
+        if neighbors >= 1 and not c.isBossName and not c.inBossRoom then
             hasAnyNormalWave = true
         end
     end
 
-    local nextRoomIndexedMob, nextRoomIndexedPart, nextRoomIndexedNum, nextRoomIndexedDist = nil, nil, math.huge, math.huge
     local nextWaveMob, nextWavePart, nextWaveDist = nil, nil, math.huge
     local fallbackWaveMob, fallbackWavePart, fallbackWaveDist = nil, nil, math.huge
     local nextNormalMob, nextNormalPart, nextNormalDist = nil, nil, math.huge
     local fallbackNormalMob, fallbackNormalPart, fallbackNormalDist = nil, nil, math.huge
-    local nextBossMob, nextBossPart, nextBossDist, nextBossRoomNum = nil, nil, math.huge, nil
+    local nextBossMob, nextBossPart, nextBossDist = nil, nil, math.huge
 
     for _, c in ipairs(inactiveCandidates) do
-        -- An isolated single unactivated model (neighbors == 0 and hadEnt ~= true) when grouped waves exist or alone is a Boss candidate!
-        local isIsolatedBoss = (c.neighbors == 0 and c.hadEnt ~= true)
-            and (hasAnyNormalWave or #inactiveCandidates == 1)
-
-        local isBossCandidate = c.isBossAnchor or c.inBossCluster or isIsolatedBoss
+        local isIsolatedBoss = (#inactiveCandidates >= 2)
+            and (c.maxHP > (minInactiveMaxHP * 1.4) or (hasAnyNormalWave and c.neighbors == 0))
+        local isBossCandidate = c.isBossName or c.inBossRoom or isIsolatedBoss
 
         if not isBossCandidate then
-            -- If numbered rooms exist, track the lowest room number (Room 2 -> Room 3 -> Room 4)
-            if c.roomNum then
-                if c.roomNum < nextRoomIndexedNum or (c.roomNum == nextRoomIndexedNum and c.dist < nextRoomIndexedDist) then
-                    nextRoomIndexedNum = c.roomNum
-                    nextRoomIndexedDist = c.dist
-                    nextRoomIndexedMob = c.mob
-                    nextRoomIndexedPart = c.part
-                end
-            end
-
             if c.neighbors >= 1 then
                 if c.dist <= maxNextRoomDist and c.dist < nextWaveDist then
                     nextWaveDist = c.dist
@@ -2164,7 +1957,6 @@ local function findBestPBTarget(isRaid)
                     fallbackWavePart = c.part
                 end
             end
-
             if c.dist <= maxNextRoomDist and c.dist < nextNormalDist then
                 nextNormalDist = c.dist
                 nextNormalMob = c.mob
@@ -2176,41 +1968,25 @@ local function findBestPBTarget(isRaid)
                 fallbackNormalPart = c.part
             end
         else
-            -- NEVER select a Boss candidate that is currently marked isLockedBoss!
-            -- This makes it 100% impossible for the script to return ("يرجع") to a locked Boss Arena!
-            if not c.isLockedBoss and c.dist < nextBossDist then
+            if c.dist < nextBossDist then
                 nextBossDist = c.dist
                 nextBossMob = c.mob
                 nextBossPart = c.part
-                nextBossRoomNum = c.roomNum
             end
         end
     end
 
-    -- Priority 0: Lowest numbered normal room (Room 2 -> Room 3 -> Room 4) when numbered rooms exist!
-    if nextRoomIndexedMob then return nextRoomIndexedMob, nextRoomIndexedPart end
-    -- Priority A: Closest multi-enemy normal room wave within adjacent distance
+    -- Priority A: Closest multi-enemy normal room wave within adjacent distance (Room 1 -> Room 2 -> Room 3 -> Room 4)
     if nextWaveMob then return nextWaveMob, nextWavePart end
     -- Priority B: Any multi-enemy normal room wave ANYWHERE in the dungeon (NEVER jumps to the Boss while a normal room wave exists!)
     if fallbackWaveMob then return fallbackWaveMob, fallbackWavePart end
     -- Priority C: Any non-Boss normal mob ANYWHERE in the dungeon
     if nextNormalMob then return nextNormalMob, nextNormalPart end
     if fallbackNormalMob then return fallbackNormalMob, fallbackNormalPart end
-
-    -- Priority D: Before entering the Boss Arena (nextBossMob), verify that there are NO unvisited earlier numbered rooms
-    -- (e.g. if Room 2/3/4 only spawns its enemies when the player steps into workspace["2"]/"3"/"4")!
-    if nextBossMob then
-        local curRoom = State.PB_CurrentRoomNum or 1
-        local targetBossRoom = nextBossRoomNum or chapter1BossRoomNum
-        for r = math.max(1, curRoom), (targetBossRoom - 1) do
-            if roomBoxes[r] and not State.PB_VisitedNumberedRooms[r] then
-                -- Let checkPBDungeonRoomTransition() step into unvisited Room r first so its enemies spawn!
-                return nil, nil
-            end
-        end
-        if not State.PB_LastActiveRoomTime or sinceLastRoom >= 3.5 then
-            return nextBossMob, nextBossPart
-        end
+    -- Priority D: ONLY when 100% of normal room waves in the chapter are dead, enter the Boss Room!
+    if nextBossMob and (not State.PB_LastActiveRoomTime or sinceLastRoom >= 2.5) then
+        State.PB_FoughtBossInSession = true
+        return nextBossMob, nextBossPart
     end
     return nil, nil
 end
@@ -2257,7 +2033,7 @@ local function pbBreakAllBreakablesRemotely()
     return count > 0
 end
 
--- God Damage + 20s Stun Buff (TexRBLX + thha3203 custom-pixel-blade + Vortex) & Zero-Lag Auto Heal
+-- God Damage + 999s Stun Buff + Defensive Shield & Rapid Auto-Heal
 -- IMPORTANT: NEVER calls blockRemote:FireServer (calling blockRemote locks the character in Shield state and stops M1 sword clicks!)
 local function applyPBTempBuffAndHeal(forceBuff)
     refreshCharacterRefs()
@@ -2270,8 +2046,8 @@ local function applyPBTempBuffAndHeal(forceBuff)
     local activeChar = rawChar or Character
     if not activeChar or not abilityEvent then return end
 
-    -- Apply all 3 tempbuffs (including stunDur = 20 from custom-pixel-blade.lua!) once every 20s
-    if forceBuff or State.PB_LastBuffedChar ~= activeChar or (now - (State.PB_LastBuffTime or 0)) >= 20 then
+    -- Apply all 3 tempbuffs (including Defensive boosts + stunDur = 999) once every 18s
+    if forceBuff or State.PB_LastBuffedChar ~= activeChar or (now - (State.PB_LastBuffTime or 0)) >= 18 then
         State.PB_LastBuffTime = now
         State.PB_LastBuffedChar = activeChar
         task.spawn(function()
@@ -2283,7 +2059,10 @@ local function applyPBTempBuffAndHeal(forceBuff)
                             statBoosts = {
                                 Dmg = "999999999%",
                                 BaseSpeed = "100%",
-                                stunDur = 20
+                                Defense = "9999999%",
+                                Armor = "9999999%",
+                                Health = "9999999%",
+                                stunDur = 999
                             },
                             dur = 999999,
                             name = "tempbuff"
@@ -2294,7 +2073,9 @@ local function applyPBTempBuffAndHeal(forceBuff)
                             statBoosts = {
                                 Dmg = "5500000000%",
                                 BaseSpeed = "45%",
-                                stunDur = 20
+                                Defense = "9999999%",
+                                Armor = "9999999%",
+                                stunDur = 999
                             },
                             dur = 50000000
                         })
@@ -2303,7 +2084,7 @@ local function applyPBTempBuffAndHeal(forceBuff)
                             name = "tempbuff",
                             statBoosts = {
                                 poisonElement = "5000",
-                                stunDur = 20
+                                stunDur = 999
                             },
                             dur = 5000000
                         })
@@ -2313,11 +2094,11 @@ local function applyPBTempBuffAndHeal(forceBuff)
         end)
     end
 
-    -- Smooth Zero-Lag Auto Heal (fires every 0.35s, 2x when hurt)
+    -- Rapid Multi-Burst Auto Heal (fires every 0.20s, 4x instant burst when hurt!)
     local isHurt = Humanoid and Humanoid.MaxHealth > 0 and Humanoid.Health < Humanoid.MaxHealth
-    if forceBuff or (now - (State.PB_LastHealTime or 0)) >= 0.35 then
+    if forceBuff or isHurt or (now - (State.PB_LastHealTime or 0)) >= 0.20 then
         State.PB_LastHealTime = now
-        local burstCount = isHurt and 2 or 1
+        local burstCount = isHurt and 4 or 1
         pcall(function()
             for _ = 1, burstCount do
                 abilityEvent:FireServer({
@@ -2326,7 +2107,69 @@ local function applyPBTempBuffAndHeal(forceBuff)
                     amount = 1
                 })
             end
+            if isHurt and Humanoid and Humanoid.Health > 0 then
+                Humanoid.Health = Humanoid.MaxHealth
+            end
         end)
+    end
+end
+
+-- 360° Anti-Monster Damage Protection Shield (حماية اللاعب من ضرر الوحوش بدون لاق):
+-- 1. Continuously stuns all active enemies within 75 studs using abilityHit ({stun = {dur = 999}}) WITHOUT tornado lag!
+-- 2. Disables CanTouch on enemy attack limbs/weapons (preserving basehitbox.CanTouch = true for player's sword) so monster touch hitboxes cannot hurt the player!
+-- 3. Freezes gathered enemy WalkSpeed = 0 so monsters cannot walk into the player!
+local function pbProtectPlayerFromMonsters()
+    if not Config.PB_PlayerProtection then return end
+    refreshCharacterRefs()
+    if not HumanoidRootPart then return end
+
+    local pbRemotes = getPBRemotes()
+    local abilityHit = pbRemotes and pbRemotes:FindFirstChild("abilityHit")
+    local myPos = HumanoidRootPart.Position
+    local allModels = State.PB_CachedModels or collectAllPBModels()
+    local stunnedCount = 0
+
+    for _, v in ipairs(allModels) do
+        if v and v.Parent and isPBTrueEnemy(v, true, true) then
+            local part = getPBMobTargetPart(v)
+            if part then
+                local dist = (part.Position - myPos).Magnitude
+                local hadEnt = v:GetAttribute("hadEntrance")
+                if dist <= 75 and (hadEnt == true or Config.PB_AutoFarmRaid or dist <= 35) then
+                    local eHum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
+                    if eHum and eHum.Health > 0 then
+                        -- Freeze monster walk speed so it cannot chase/touch the player
+                        pcall(function()
+                            if eHum.WalkSpeed > 0 then
+                                eHum.WalkSpeed = 0
+                            end
+                        end)
+                        -- Server-side 999s stun (Zero-Lag: no useAbility("tornado")!)
+                        if abilityHit and stunnedCount < 6 then
+                            stunnedCount = stunnedCount + 1
+                            pcall(function()
+                                abilityHit:FireServer(eHum, math.huge, { ["stun"] = { ["dur"] = 999 } })
+                            end)
+                        end
+                    end
+
+                    -- Disarm monster attack parts (keep basehitbox CanTouch = true for player's sword hits!)
+                    if not State.PB_DisarmedMobs then
+                        State.PB_DisarmedMobs = {}
+                    end
+                    if not State.PB_DisarmedMobs[v] then
+                        State.PB_DisarmedMobs[v] = true
+                        pcall(function()
+                            for _, desc in ipairs(v:GetDescendants()) do
+                                if desc:IsA("BasePart") and desc.Name ~= "basehitbox" then
+                                    desc.CanTouch = false
+                                end
+                            end
+                        end)
+                    end
+                end
+            end
+        end
     end
 end
 
@@ -2491,9 +2334,9 @@ local function pbDamageModel(v, wpnDmg)
             onHit:FireServer(targetObj, 9999999999, {}, 0)
             onHit:FireServer(targetObj, dmgVal, {}, 0)
         end
-        -- 2. Zero-Lag Stun + Instant Damage on primary target (abilityHit WITHOUT useAbility("tornado") so 0 lag!)
+        -- 2. Zero-Lag 999s Stun + Instant Damage on primary target (abilityHit WITHOUT useAbility("tornado") so 0 lag!)
         if abilityHit and hum and hum.Health > 0 then
-            abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 2 } })
+            abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 999 } })
         end
         if useAbility and (v.Name == "Maneater" or v:FindFirstChild("worm")) then
             useAbility:FireServer("lunarSpell")
@@ -2520,7 +2363,7 @@ local function pbDamageModel(v, wpnDmg)
                                     onHit:FireServer(oHum, dmgVal, {}, 0)
                                 end
                                 if abilityHit then
-                                    abilityHit:FireServer(oHum, math.huge, { ["stun"] = { ["dur"] = 2 } })
+                                    abilityHit:FireServer(oHum, math.huge, { ["stun"] = { ["dur"] = 999 } })
                                 end
                                 extraHits = extraHits + 1
                                 if extraHits >= 5 then break end
@@ -2533,10 +2376,10 @@ local function pbDamageModel(v, wpnDmg)
     end)
 end
 
--- Auto-Clicker Friendly Combat Positioning (Exact thha3203 pixel-blade.lua Auto Farm M1 + v4.3 Jump Physics):
--- 1. When far from the combat spot behind the monster (dist > 10.5 or horizDist > 4.2 or sinking below mobPos.Y - 1.0):
---    teleports 6.0 studs behind the monster at mobPos.Y + 2.0, facing the monster upright.
--- 2. Once behind the monster (dist <= 10.5 and horizDist <= 4.2 and Y in [mobPos.Y - 1.0 .. mobPos.Y + 14.0]):
+-- Auto-Clicker Friendly Combat Positioning + Anti-Monster-Damage Safe Backstab Distance (Exact thha3203 -7.8 offset + Jump Physics):
+-- 1. When far from the combat spot behind the monster (dist > 11.5 or horizDist > 4.5 or sinking below mobPos.Y - 1.0):
+--    teleports 7.8 studs behind the monster at mobPos.Y + 2.8 (outside monster melee reach while inside our 45-stud expanded basehitbox!).
+-- 2. Once behind the monster (dist <= 11.5 and horizDist <= 4.5 and Y in [mobPos.Y - 1.0 .. mobPos.Y + 15.0]):
 --    DOES NOT overwrite HumanoidRootPart.CFrame so the Auto-Clicker (Loop 2G) jumps & swings the sword non-stop without CFrame interruption!
 local function pbPositionAtTarget(mob, part, forceTeleport)
     refreshCharacterRefs()
@@ -2552,7 +2395,7 @@ local function pbPositionAtTarget(mob, part, forceTeleport)
     if mob.Name == "Maneater" or mob:FindFirstChild("worm") then
         local root = mob:FindFirstChild("Root") or mob:FindFirstChild("HumanoidRootPart") or part
         local mobPos = Vector3.new(root.Position.X, 35, root.Position.Z)
-        local targetPos = mobPos + (root.CFrame.LookVector * -6.5)
+        local targetPos = mobPos + (root.CFrame.LookVector * -7.5)
         if (HumanoidRootPart.Position - targetPos).Magnitude > 5.0 then
             HumanoidRootPart.CFrame = CFrame.lookAt(targetPos, mobPos)
         end
@@ -2569,7 +2412,9 @@ local function pbPositionAtTarget(mob, part, forceTeleport)
     local pivot = part.CFrame
     pcall(function() pivot = mob:GetPivot() end)
     local mobPos = pivot.Position
-    local offsetDir = (mob.Name == "Nekros" or mob.Name == "DarkNekros") and 3.5 or -6.0
+    local backOffset = Config.PB_PlayerProtection and -7.8 or -6.0
+    local yOffset = Config.PB_PlayerProtection and 2.8 or 2.0
+    local offsetDir = (mob.Name == "Nekros" or mob.Name == "DarkNekros") and 3.5 or backOffset
     local desiredXZ = mobPos + (pivot.LookVector * offsetDir)
 
     local myPos = HumanoidRootPart.Position
@@ -2577,18 +2422,17 @@ local function pbPositionAtTarget(mob, part, forceTeleport)
     local horizDistToSpot = Vector2.new(myPos.X - desiredXZ.X, myPos.Z - desiredXZ.Z).Magnitude
     local vertDiff = myPos.Y - mobPos.Y
 
-    if distToMob > 10.5 or horizDistToSpot > 4.2 or vertDiff < -1.0 or vertDiff > 14.0 then
-        local startPos = Vector3.new(desiredXZ.X, mobPos.Y + 2.0, desiredXZ.Z)
+    if distToMob > 11.5 or horizDistToSpot > 4.5 or vertDiff < -1.0 or vertDiff > 15.0 then
+        local startPos = Vector3.new(desiredXZ.X, mobPos.Y + yOffset, desiredXZ.Z)
         local lookAtPos = Vector3.new(mobPos.X, startPos.Y, mobPos.Z)
         HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
         HumanoidRootPart.CFrame = CFrame.lookAt(startPos, lookAtPos)
     end
 end
 
--- Sequential Room & Safe-Zone Campfire Transition:
--- 1. If an intermediate numbered normal room ("2", "3", "4") has not been visited yet (and only spawns waves when entered),
---    steps sequentially into the lowest unvisited normal room (2 -> 3 -> 4) before the Chapter Boss Room!
--- 2. Handles Campfire transitions (6->7 Normal, 7->8 Heroic, 8->9 Nightmare, 20->BossRoom) when standing inside the safe room.
+-- Safe-Zone Campfire & Final Boss Room Transition (Exact Proven v4.6 Transition Logic):
+-- ONLY triggers when 0 enemies exist anywhere AND the player is ALREADY standing inside the safe room ("6", "7", "8", or "20", within <= 75 studs)
+-- AND at least 4.5 seconds have passed since the last active room was cleared.
 local function checkPBDungeonRoomTransition()
     refreshCharacterRefs()
     if not HumanoidRootPart then return false end
@@ -2598,42 +2442,7 @@ local function checkPBDungeonRoomTransition()
     State.PB_ActiveFollowMob = nil
     State.PB_ActiveFollowPart = nil
 
-    local now = tick()
-    local sinceClear = State.PB_LastActiveRoomTime and (now - State.PB_LastActiveRoomTime) or 999
-    if sinceClear < 1.5 then
-        return false
-    end
-
-    local diffObj = workspace:FindFirstChild("difficulty")
-    local diffVal = diffObj and tostring(diffObj.Value) or "Normal"
-    local chapter1BossRoomNum = (diffVal == "Nightmare" and 7) or (diffVal == "Heroic" and 6) or 5
-
-    -- 0. Sequential Numbered Normal Room Walker ("2" -> "3" -> "4") when the next room requires proximity entry to spawn its wave!
-    State.PB_VisitedNumberedRooms = State.PB_VisitedNumberedRooms or {}
-    local startRoom = math.max(2, (State.PB_CurrentRoomNum or 1) + 1)
-    for r = startRoom, (chapter1BossRoomNum - 1) do
-        if not State.PB_VisitedNumberedRooms[r] then
-            local rObj = workspace:FindFirstChild(tostring(r))
-            if rObj then
-                local rCF, _ = getPBRoomBoundingBox(rObj)
-                local targetPos = rCF and rCF.Position or nil
-                if not targetPos then
-                    pcall(function() targetPos = rObj:GetPivot().Position end)
-                end
-                if targetPos then
-                    State.PB_VisitedNumberedRooms[r] = true
-                    State.PB_CurrentRoomNum = r
-                    State.PB_LastActiveRoomPos = targetPos
-                    State.PB_LastActiveRoomTime = now
-                    HumanoidRootPart.CFrame = CFrame.new(targetPos + Vector3.new(0, 5, 0))
-                    task.wait(1.2)
-                    return true
-                end
-            end
-        end
-    end
-
-    if sinceClear < 4.0 then
+    if State.PB_LastActiveRoomTime and (tick() - State.PB_LastActiveRoomTime) < 4.5 then
         return false
     end
 
@@ -2644,6 +2453,7 @@ local function checkPBDungeonRoomTransition()
         local ok20, pos20 = pcall(function() return r20:GetPivot().Position end)
         if ok20 and pos20 and (pos20 - myPos).Magnitude <= 75 then
             State.PB_VisitedFinalRoom[bossRoom] = true
+            State.PB_EnteredBossRoom = true
             local targetCF = CFrame.new(bossRoom:GetPivot().Position + Vector3.new(0, 5, 0))
             HumanoidRootPart.CFrame = targetCF
             task.wait(1.5)
@@ -2653,6 +2463,8 @@ local function checkPBDungeonRoomTransition()
 
     -- 2. Safe-zone Campfire transition: 6->7 (Normal), 7->8 (Heroic), 8->9 (Nightmare)
     -- STRICT GUARD: Player MUST already be standing inside r6 / r7 / r8 (within <= 75 studs)!
+    local diffObj = workspace:FindFirstChild("difficulty")
+    local diffVal = diffObj and tostring(diffObj.Value) or "Normal"
     local r6 = workspace:FindFirstChild("6")
     local r7 = workspace:FindFirstChild("7")
     local r8 = workspace:FindFirstChild("8")
@@ -3492,43 +3304,136 @@ task.spawn(function()
     end
 end)
 
--- 2C. Dedicated Pixel Blade Auto Pick Upgrades & Off-Screen Mover Loop (Exact Mana-scripts Method)
+-- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (thha3203 v5 KeyCode.Two + Overhead Card Priority Click + Remote)
+-- IMPORTANT: Never pushes upgradeFrame off-screen to Y = -1.1 before selecting the upgrade so buttons have valid screen coordinates!
+local LastUpgradeKeyToggle = false
 task.spawn(function()
     while State.Running do
-        task.wait(0.45)
-        if Config.PB_AutoUpgrade then
-            pcall(function()
+        task.wait(0.28)
+        pcall(function()
+            local dBlur = Lighting:FindFirstChild("deathBlur")
+            if dBlur then dBlur.Size = 0 end
+            local sBlur = Lighting:FindFirstChild("screenBlur")
+            if sBlur then sBlur.Size = 0 end
+
+            local gameUI = PlayerGui:FindFirstChild("gameUI")
+            local upgFrame = gameUI and gameUI:FindFirstChild("upgradeFrame")
+
+            -- Restore upgradeFrame onto screen if a previous version moved it to Y = -1.1
+            if upgFrame and not Config.PB_HideUpgradePopup and upgFrame.Position.Y.Scale < -0.2 then
+                upgFrame.Position = UDim2.new(0, 0, 0, 0)
+            end
+
+            if Config.PB_AutoUpgrade then
                 local pbRemotes = getPBRemotes()
                 local upgRemote = pbRemotes and pbRemotes:FindFirstChild("plrUpgrade")
+
+                -- 1. If upgradeFrame is visible on screen, scan for upgrade cards (prioritizing "Overhead"!) and click + fire remote
+                local upgVisible = upgFrame and isGuiVisible(upgFrame) and upgFrame.AbsoluteSize.X > 40 and upgFrame.AbsoluteSize.Y > 40
+                local chosenIndex = 2
+                local targetCardBtn = nil
+
+                if upgVisible then
+                    local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+                    local candidateBtns = {}
+                    for _, desc in ipairs(upgFrame:GetDescendants()) do
+                        if desc:IsA("GuiButton") and isGuiVisible(desc) then
+                            local sz = desc.AbsoluteSize
+                            local pos = desc.AbsolutePosition
+                            if sz.X >= 36 and sz.Y >= 36 and pos.X >= 0 and pos.Y >= 0 and pos.X <= vp.X and pos.Y <= vp.Y then
+                                local combinedText = string.lower(desc.Name or "")
+                                if desc:IsA("TextButton") and desc.Text then
+                                    combinedText = combinedText .. " " .. string.lower(desc.Text)
+                                end
+                                for _, sub in ipairs(desc:GetDescendants()) do
+                                    if sub:IsA("TextLabel") and sub.Text then
+                                        combinedText = combinedText .. " " .. string.lower(sub.Text)
+                                    end
+                                end
+                                if not string.find(combinedText, "reroll", 1, true)
+                                    and not string.find(combinedText, "robux", 1, true)
+                                    and not string.find(combinedText, "skip", 1, true)
+                                    and not string.find(combinedText, "close", 1, true) then
+                                    table.insert(candidateBtns, {
+                                        btn = desc,
+                                        text = combinedText,
+                                        x = pos.X
+                                    })
+                                end
+                            end
+                        end
+                    end
+
+                    table.sort(candidateBtns, function(a, b)
+                        return a.x < b.x
+                    end)
+
+                    for idx, item in ipairs(candidateBtns) do
+                        if string.find(item.text, "overhead", 1, true) then
+                            targetCardBtn = item.btn
+                            chosenIndex = math.clamp(idx, 1, 3)
+                            break
+                        end
+                    end
+                    if not targetCardBtn and #candidateBtns > 0 then
+                        local midIdx = math.clamp(math.ceil(#candidateBtns / 2), 1, #candidateBtns)
+                        targetCardBtn = candidateBtns[midIdx].btn
+                        chosenIndex = math.clamp(midIdx, 1, 3)
+                    end
+                end
+
+                -- 2. Fire plrUpgrade remote (both chosen card index and random 1..3 fallback)
                 if upgRemote then
+                    upgRemote:FireServer(chosenIndex)
                     upgRemote:FireServer(math.random(1, 3))
                 end
 
-                if Config.PB_HideUpgradePopup then
-                    local dBlur = Lighting:FindFirstChild("deathBlur")
-                    if dBlur then dBlur.Size = 0 end
-                    local sBlur = Lighting:FindFirstChild("screenBlur")
-                    if sBlur then sBlur.Size = 0 end
+                -- 3. Exact thha3203/pixel-blade-v5.lua Auto Pick Upgrade key event (Enum.KeyCode.Two / One)
+                if VirtualInputManager then
+                    LastUpgradeKeyToggle = not LastUpgradeKeyToggle
+                    local keyToSend = (chosenIndex == 1 and Enum.KeyCode.One)
+                        or (chosenIndex == 3 and Enum.KeyCode.Three)
+                        or (LastUpgradeKeyToggle and Enum.KeyCode.Two or Enum.KeyCode.One)
+                    VirtualInputManager:SendKeyEvent(true, keyToSend, false, game)
+                    task.wait(0.03)
+                    VirtualInputManager:SendKeyEvent(false, keyToSend, false, game)
 
-                    local gameUI = PlayerGui:FindFirstChild("gameUI")
-                    local upgFrame = gameUI and gameUI:FindFirstChild("upgradeFrame")
-                    if upgFrame then
-                        upgFrame.Position = UDim2.new(0, 0, -1.1, 0)
+                    -- 4. Also click the visible upgrade card button on screen if upgradeFrame is open!
+                    if targetCardBtn and targetCardBtn.Parent and not State.PB_M1ClickInFlight then
+                        State.PB_M1ClickInFlight = true
+                        pcall(function()
+                            local inset = GuiService:GetGuiInset()
+                            local pos = targetCardBtn.AbsolutePosition
+                            local sz = targetCardBtn.AbsoluteSize
+                            local cx = math.floor(pos.X + sz.X * 0.5)
+                            local cy = math.floor(pos.Y + sz.Y * 0.5 + inset.Y)
+                            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+                            task.wait(0.02)
+                            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+                        end)
+                        State.PB_M1ClickInFlight = false
                     end
                 end
-            end)
-        end
+
+                if Config.PB_HideUpgradePopup and upgFrame and not upgVisible then
+                    upgFrame.Position = UDim2.new(0, 0, -1.1, 0)
+                end
+            end
+        end)
     end
 end)
 
--- 2D. Dedicated Pixel Blade God Buff, Smooth Auto Heal & Throttled Inf Dash Loop (Zero Lag!)
+-- 2D. Dedicated Pixel Blade God Buff, Rapid Auto Heal, 360° Monster Protection & Throttled Inf Dash Loop (Zero Lag!)
 -- IMPORTANT: Keeps character CanCollide intact so the player stands on the floor, never sinks, and jumps naturally with Humanoid.Jump!
 task.spawn(function()
     while State.Running do
-        task.wait(0.40)
+        task.wait(0.22)
         pcall(function()
-            if Config.PB_GodBuffAndHeal or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_KillAura then
+            if Config.PB_GodBuffAndHeal or Config.PB_PlayerProtection or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_KillAura then
                 applyPBTempBuffAndHeal(false)
+            end
+            if Config.PB_PlayerProtection then
+                pbProtectPlayerFromMonsters()
             end
             if Config.PB_InfDashAndNoCD and (tick() - (State.PB_LastInfDashTick or 0)) >= 3.0 then
                 State.PB_LastInfDashTick = tick()
@@ -3551,12 +3456,26 @@ task.spawn(function()
     end
 end)
 
--- 2F. Dedicated Pixel Blade Dungeon & Raid Auto Farm Movement & Step-by-Step Room Progression Loop
+-- 2F. Dedicated Pixel Blade Dungeon & Raid Auto Farm Movement & Step-by-Step Room Progression Loop (Proven v4.6 Room Transitions)
 task.spawn(function()
     while State.Running do
         task.wait(0.15)
         pcall(function()
             refreshCharacterRefs()
+
+            -- Continuously record current dungeon worldType & difficulty so Auto-Replay always replays the exact active dungeon!
+            local wtObj = workspace:FindFirstChild("worldType")
+            local dfObj = workspace:FindFirstChild("difficulty")
+            if wtObj and wtObj.Value and tostring(wtObj.Value) ~= "" and tostring(wtObj.Value) ~= "Lobby" then
+                local curW = tostring(wtObj.Value)
+                local curD = (dfObj and dfObj.Value and tostring(dfObj.Value) ~= "") and tostring(dfObj.Value) or Config.PB_LastDungeonDiff
+                if Config.PB_LastDungeonWorld ~= curW or Config.PB_LastDungeonDiff ~= curD then
+                    Config.PB_LastDungeonWorld = curW
+                    Config.PB_LastDungeonDiff = curD
+                    saveConfig()
+                end
+            end
+
             if (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid) and HumanoidRootPart then
                 local isRaid = Config.PB_AutoFarmRaid
                 local cutscene = workspace:FindFirstChild("inCutscene")
@@ -3565,6 +3484,7 @@ task.spawn(function()
                 if not inCutscene then
                     local mob, mobPart = findBestPBTarget(isRaid)
                     if mob and mobPart then
+                        State.PB_ZeroEnemySinceTick = nil
                         local dist = math.floor((mobPart.Position - HumanoidRootPart.Position).Magnitude)
                         local hp = math.floor(getPBMobCurrentHP(mob))
                         local hadEnt = mob:GetAttribute("hadEntrance")
@@ -3586,40 +3506,22 @@ task.spawn(function()
                             hadEnt = mob:GetAttribute("hadEntrance")
                         end
 
-                        -- Fast Auto-Recovery if a room/Boss stays locked (hadEntrance ~= true or Boss taking 0 HP damage for >= 1.8s)
+                        -- Exact Proven v4.6 Room-Lock Auto-Recovery:
+                        -- If a single unactivated enemy (hadEntrance == false) takes 0 damage for >= 2.5s, temporarily ignore ONLY that single mob for 45s
+                        -- (automatically unlocked as soon as hadEntrance becomes true!).
+                        -- Never locks neighbor mobs and never teleports back to previous rooms!
                         if State.PB_TrackingMob ~= mob then
                             State.PB_TrackingMob = mob
                             State.PB_TrackingMobStartTick = tick()
                             State.PB_TrackingMobStartHP = hp
                         else
-                            if hp < (State.PB_TrackingMobStartHP or hp) or (hadEnt == true and not PB_BOSS_NAMES[mob.Name]) then
+                            if hp < (State.PB_TrackingMobStartHP or hp) or hadEnt == true then
                                 State.PB_TrackingMobStartTick = tick()
                                 State.PB_TrackingMobStartHP = hp
-                            elseif not isRaid and (hadEnt ~= true or PB_BOSS_NAMES[mob.Name]) and (tick() - (State.PB_TrackingMobStartTick or tick())) >= 1.8 then
+                            elseif not isRaid and hadEnt == false and (tick() - (State.PB_TrackingMobStartTick or tick())) >= 2.5 then
                                 State.PB_LockedMobIgnoreUntil = State.PB_LockedMobIgnoreUntil or {}
-                                State.PB_LockedBossMobs = State.PB_LockedBossMobs or {}
-                                State.PB_LockedRoomPositions = State.PB_LockedRoomPositions or {}
-                                local expireAt = tick() + 45.0
-                                State.PB_LockedMobIgnoreUntil[mob] = expireAt
-                                State.PB_LockedBossMobs[mob] = true
-                                table.insert(State.PB_LockedRoomPositions, mobPart.Position)
-                                -- Also lock any unactivated mobs inside that same locked Boss/room cluster (within 85 studs)
-                                local allMobs = collectAllPBModels()
-                                for _, other in ipairs(allMobs) do
-                                    if other and other:IsA("Model") and other ~= mob and other:GetAttribute("hadEntrance") ~= true then
-                                        local oPart = getPBMobTargetPart(other)
-                                        if oPart and (oPart.Position - mobPart.Position).Magnitude <= 85 then
-                                            State.PB_LockedMobIgnoreUntil[other] = expireAt
-                                            State.PB_LockedBossMobs[other] = true
-                                        end
-                                    end
-                                end
+                                State.PB_LockedMobIgnoreUntil[mob] = tick() + 45.0
                                 State.PB_TrackingMob = nil
-                                State.PB_ActiveFollowMob = nil
-                                State.PB_ActiveFollowPart = nil
-                                if not checkPBDungeonRoomTransition() and State.PB_LastActiveRoomPos and HumanoidRootPart then
-                                    HumanoidRootPart.CFrame = CFrame.new(State.PB_LastActiveRoomPos + Vector3.new(0, 4, 0))
-                                end
                                 State.PB_DungeonStatusText = "🔄 الغرفة مقفلة حالياً، الانتقال للغرفة المفتوحة..."
                                 return
                             end
@@ -3639,6 +3541,7 @@ task.spawn(function()
                             HumanoidRootPart.CFrame = CFrame.new(169, 197, 7028)
                             task.wait(2.5)
                             State.PB_EnteredKorthRoom = true
+                            State.PB_FoughtBossInSession = true
                         end
 
                         -- Atticus Vault Entrance Handling
@@ -3651,11 +3554,12 @@ task.spawn(function()
                                     HumanoidRootPart.CFrame = CFrame.new(vault:GetPivot().Position + Vector3.new(0, 5, 0))
                                 end
                                 State.PB_EnteredBossRoom = true
+                                State.PB_FoughtBossInSession = true
                                 task.wait(0.5)
                             end
                         end
 
-                        -- Position 6.0 studs behind monster (stops overwriting CFrame once in range so Auto-Clicker swings freely!)
+                        -- Position safely behind monster (stops overwriting CFrame once in range so Auto-Clicker swings freely!)
                         pbPositionAtTarget(mob, mobPart, true)
 
                         -- Gather all other active room enemies right onto the primary target spot so they are hit together!
@@ -3663,13 +3567,16 @@ task.spawn(function()
                             pbBringAndExpandTargets()
                         end
 
-                        -- Execute backup remote damage + Healer/Drainer/Gathered-Mob Stun (while Loop 2G clicks the Sword Button non-stop!)
+                        -- Execute backup remote damage + 999s Stun (while Loop 2G clicks the Sword Button non-stop!)
                         pbDamageModel(mob, currentPBWeaponDamage())
                     elseif Config.PB_AutoFarmDungeon then
                         State.PB_ActiveFollowMob = nil
                         State.PB_ActiveFollowPart = nil
+                        if not State.PB_ZeroEnemySinceTick then
+                            State.PB_ZeroEnemySinceTick = tick()
+                        end
                         local sinceClear = tick() - (State.PB_LastActiveRoomTime or 0)
-                        if not State.PB_LastActiveRoomTime or sinceClear < 1.5 then
+                        if not State.PB_LastActiveRoomTime or sinceClear < 2.0 then
                             State.PB_DungeonStatusText = "⏳ انتظار فتح باب الغرفة التالية وظهور الوحوش..."
                         else
                             State.PB_DungeonStatusText = "🏃 الانتقال التلقائي للغرفة التالية..."
@@ -3713,17 +3620,163 @@ task.spawn(function()
     end
 end)
 
--- 3. Pixel Blade Slow Automation Loop (Chests, Wishes, Quests, Portal Auto-Join)
+-- Helper: Trigger Auto-Replay of the current/last Dungeon when the Dungeon finishes!
+local function pbCheckAndReplayDungeon(pbRemotes)
+    if not Config.PB_AutoReplayDungeon or not pbRemotes then return end
+    local playerTP = pbRemotes:FindFirstChild("playerTP")
+    if not playerTP then return end
+
+    local now = tick()
+    local wtObj = workspace:FindFirstChild("worldType")
+    local dfObj = workspace:FindFirstChild("difficulty")
+    local worldToReplay = (wtObj and wtObj.Value and tostring(wtObj.Value) ~= "" and tostring(wtObj.Value) ~= "Lobby")
+        and tostring(wtObj.Value)
+        or (Config.PB_LastDungeonWorld or Config.PB_SelectedDungeon or "SunkenDepths")
+    local diffToReplay = (dfObj and dfObj.Value and tostring(dfObj.Value) ~= "")
+        and tostring(dfObj.Value)
+        or (Config.PB_LastDungeonDiff or Config.PB_SelectedDifficulty or "Normal")
+
+    -- 1. Scan PlayerGui for any visible End-of-Dungeon / Victory / Play-Again / Replay button
+    local foundEndScreenBtn = nil
+    pcall(function()
+        local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+        for _, gui in ipairs(PlayerGui:GetChildren()) do
+            if gui ~= State.HubScreenGui and gui:IsA("ScreenGui") and gui.Enabled then
+                for _, desc in ipairs(gui:GetDescendants()) do
+                    if desc:IsA("GuiButton") and isGuiVisible(desc) then
+                        local sz = desc.AbsoluteSize
+                        local pos = desc.AbsolutePosition
+                        if sz.X >= 35 and sz.Y >= 24 and pos.X >= 0 and pos.Y >= 0 and pos.X <= vp.X and pos.Y <= vp.Y then
+                            local txt = string.lower(desc.Name or "")
+                            if desc:IsA("TextButton") and desc.Text then
+                                txt = txt .. " " .. string.lower(desc.Text)
+                            end
+                            for _, sub in ipairs(desc:GetDescendants()) do
+                                if sub:IsA("TextLabel") and sub.Text then
+                                    txt = txt .. " " .. string.lower(sub.Text)
+                                end
+                            end
+                            local parentName = desc.Parent and string.lower(desc.Parent.Name or "") or ""
+                            local grandName = (desc.Parent and desc.Parent.Parent) and string.lower(desc.Parent.Parent.Name or "") or ""
+                            local inEndFrame = string.find(parentName, "end", 1, true)
+                                or string.find(parentName, "victory", 1, true)
+                                or string.find(parentName, "win", 1, true)
+                                or string.find(parentName, "result", 1, true)
+                                or string.find(parentName, "complete", 1, true)
+                                or string.find(parentName, "reward", 1, true)
+                                or string.find(grandName, "end", 1, true)
+                                or string.find(grandName, "victory", 1, true)
+                                or string.find(grandName, "result", 1, true)
+                                or string.find(grandName, "complete", 1, true)
+
+                            if string.find(txt, "play again", 1, true)
+                                or string.find(txt, "playagain", 1, true)
+                                or string.find(txt, "replay", 1, true)
+                                or string.find(txt, "retry", 1, true)
+                                or string.find(txt, "rejoin", 1, true)
+                                or (inEndFrame and (string.find(txt, "again", 1, true) or string.find(txt, "continue", 1, true))) then
+                                foundEndScreenBtn = desc
+                                return
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    -- 2. Check if Final Boss Room was cleared (0 alive enemies for >= 5.5s after entering Boss Room / fighting Boss)
+    local zeroEnemyDuration = State.PB_ZeroEnemySinceTick and (now - State.PB_ZeroEnemySinceTick) or 0
+    local inFinalBossArea = State.PB_EnteredBossRoom or State.PB_EnteredKorthRoom or State.PB_FoughtBossInSession
+    if not inFinalBossArea and HumanoidRootPart then
+        local br = workspace:FindFirstChild("BossRoom") or workspace:FindFirstChild("Vault")
+        if br then
+            pcall(function()
+                if (br:GetPivot().Position - HumanoidRootPart.Position).Magnitude <= 140 then
+                    inFinalBossArea = true
+                end
+            end)
+        end
+    end
+    local bossClearedDone = inFinalBossArea and zeroEnemyDuration >= 5.5
+
+    -- 3. Check if returned to Lobby (no dungeon rooms/difficulty in workspace and 0 enemies for >= 4.0s)
+    local isLobbyPlace = (workspace:FindFirstChild("1") == nil and workspace:FindFirstChild("BossRoom") == nil and dfObj == nil)
+    local lobbyReplayReady = isLobbyPlace and zeroEnemyDuration >= 3.5
+
+    if foundEndScreenBtn or bossClearedDone or lobbyReplayReady then
+        if (now - (State.PB_LastReplayFireTick or 0)) < 2.2 then
+            return
+        end
+        State.PB_LastReplayFireTick = now
+        State.PB_DungeonStatusText = string.format("🔄 إعادة الدنجن تلقائياً (%s - %s)...", tostring(worldToReplay), tostring(diffToReplay))
+
+        -- Collect any final Boss Chest / ProximityPrompt before replaying
+        pcall(pbOpenAllChestsNow)
+        pcall(function()
+            local gotChest = pbRemotes:FindFirstChild("gotChest")
+            if gotChest then gotChest:FireServer() end
+            if fireproximityprompt and HumanoidRootPart then
+                for _, desc in ipairs(workspace:GetDescendants()) do
+                    if desc:IsA("ProximityPrompt") and desc.Enabled then
+                        local pPart = desc.Parent and (desc.Parent:IsA("BasePart") and desc.Parent or desc.Parent:FindFirstChildWhichIsA("BasePart"))
+                        if pPart and (pPart.Position - HumanoidRootPart.Position).Magnitude <= 100 then
+                            fireproximityprompt(desc)
+                        end
+                    end
+                end
+            end
+        end)
+
+        -- Click the visible Play Again / Replay UI button if present
+        if foundEndScreenBtn and foundEndScreenBtn.Parent and VirtualInputManager and not State.PB_M1ClickInFlight then
+            State.PB_M1ClickInFlight = true
+            pcall(function()
+                local inset = GuiService:GetGuiInset()
+                local pos = foundEndScreenBtn.AbsolutePosition
+                local sz = foundEndScreenBtn.AbsoluteSize
+                local cx = math.floor(pos.X + sz.X * 0.5)
+                local cy = math.floor(pos.Y + sz.Y * 0.5 + inset.Y)
+                VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+                task.wait(0.03)
+                VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+            end)
+            State.PB_M1ClickInFlight = false
+        end
+
+        -- Fire playerTP remote to restart the exact same Dungeon & Difficulty!
+        pcall(function()
+            saveConfig()
+            setupAutoExecuteOnTeleport()
+            for _, remName in ipairs({ "playAgain", "PlayAgain", "replay", "Replay", "retry", "Retry" }) do
+                local r = pbRemotes:FindFirstChild(remName)
+                if r and r:IsA("RemoteEvent") then
+                    r:FireServer()
+                end
+            end
+            playerTP:FireServer(worldToReplay, diffToReplay, true)
+        end)
+    end
+end
+
+-- 3. Pixel Blade Slow Automation Loop (Chests, Wishes, Quests, Auto-Replay Dungeon, Portal Auto-Join)
 local CachedPBQuestData = nil
 local LastQuestClaimTick = 0
 task.spawn(function()
     while State.Running do
-        task.wait(2.5)
+        task.wait(2.0)
         local pbRemotes = getPBRemotes()
         if pbRemotes then
             -- Auto Open Owned Chests in Inventory (thha3203 v5 exact path, zero lag)
             if Config.PB_AutoOpenChests or Config.PB_AutoFarmDungeon then
                 pcall(pbOpenAllChestsNow)
+            end
+
+            -- Auto Replay Dungeon when finished (إعادة الدنجن تلقائياً بعد الانتهاء)
+            if Config.PB_AutoReplayDungeon then
+                pcall(function()
+                    pbCheckAndReplayDungeon(pbRemotes)
+                end)
             end
 
             -- Auto Open Wishes (Only when remainingWishes > 0, exact thha3203 v5)
@@ -4367,8 +4420,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v5.1 | Pixel Blade [Anti-Boss-Jump + Bring Mobs]"
-    or "⚔️ Delta Hub v5.1 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v5.2 | Pixel Blade [Auto Replay + Monster Shield]"
+    or "⚔️ Delta Hub v5.2 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -4737,7 +4790,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.1 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.2 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -4766,14 +4819,9 @@ if CurrentGame == "PixelBlade" then
         Config.PB_AutoFarmDungeon = val
         State.PB_EnteredBossRoom = false
         State.PB_EnteredKorthRoom = false
+        State.PB_FoughtBossInSession = false
         State.PB_VisitedFinalRoom = {}
-        State.PB_VisitedNumberedRooms = {}
-        State.PB_CurrentRoomNum = 0
-        State.PB_RoomBoxCache = {}
         State.PB_LockedMobIgnoreUntil = {}
-        State.PB_LockedBossMobs = {}
-        State.PB_LockedRoomPositions = {}
-        State.PB_ActiveRoomAnchorPos = nil
         State.PB_LastActiveRoomPos = nil
         State.PB_LastActiveRoomTime = nil
         State.PB_UsedExitZones = {}
@@ -4784,6 +4832,22 @@ if CurrentGame == "PixelBlade" then
             State.PB_ActiveTargetCFrame = nil
         else
             applyPBTempBuffAndHeal(true)
+        end
+    end)
+
+    addToggle(TabPBFarm, "إعادة الدنجن تلقائياً بعد الانتهاء (Auto Replay Dungeon)", Config.PB_AutoReplayDungeon, function(val)
+        Config.PB_AutoReplayDungeon = val
+    end)
+
+    addToggle(TabPBFarm, "اختيار الترقية تلقائياً بالدنجن (Auto Pick Upgrade)", Config.PB_AutoUpgrade, function(val)
+        Config.PB_AutoUpgrade = val
+    end)
+
+    addToggle(TabPBFarm, "🛡️ حماية اللاعب من ضرب الوحوش (Monster Damage Shield)", Config.PB_PlayerProtection, function(val)
+        Config.PB_PlayerProtection = val
+        if val then
+            applyPBTempBuffAndHeal(true)
+            pbProtectPlayerFromMonsters()
         end
     end)
 
@@ -4971,12 +5035,18 @@ if CurrentGame == "PixelBlade" then
 
     addSectionHeader(TabPBLoot, "🌀 دخول البوابات التلقائي + أكواد World 5 / CHRONOS")
 
+    addToggle(TabPBLoot, "إعادة الدنجن تلقائياً بعد الانتهاء (Auto Replay Dungeon)", Config.PB_AutoReplayDungeon, function(val)
+        Config.PB_AutoReplayDungeon = val
+    end)
+
     addCycleButton(TabPBLoot, "اختيار البوابة (Select Portal)", { "SunkenDepths", "Grasslands", "AncientSands", "Frostbite", "MagmaCaverns" }, Config.PB_SelectedDungeon, function(opt)
         Config.PB_SelectedDungeon = opt
+        Config.PB_LastDungeonWorld = opt
     end)
 
     addCycleButton(TabPBLoot, "اختيار الصعوبة (Difficulty)", { "Normal", "Heroic", "Nightmare" }, Config.PB_SelectedDifficulty, function(opt)
         Config.PB_SelectedDifficulty = opt
+        Config.PB_LastDungeonDiff = opt
     end)
 
     addToggle(TabPBLoot, "دخول البوابة تلقائياً (Auto Join Portal)", Config.PB_AutoJoinPortal, function(val)
