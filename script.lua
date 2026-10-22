@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v6.2 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v6.3 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.2)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.3)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -1639,6 +1639,8 @@ local function findNearestPBPillar()
 end
 
 local function pbHitPillarModel(v)
+    if tick() < (State.PB_QuietUntil or 0) then return end -- v6.3 post-pick quiet: no server sends right after a level-up pick
+
     local pbRemotes = getPBRemotes()
     if not pbRemotes then return false end
     local onHit = pbRemotes:FindFirstChild("onHit")
@@ -2169,6 +2171,8 @@ end
 
 -- Lightweight Remote Breakables Destroyer (Exact Mana-scripts line 282-286: zero Tornado lag!)
 local function pbBreakAllBreakablesRemotely()
+    if tick() < (State.PB_QuietUntil or 0) then return end -- v6.3 post-pick quiet: no server sends right after a level-up pick
+
     local pbRemotes = getPBRemotes()
     if not pbRemotes then return false end
     local onHit = pbRemotes:FindFirstChild("onHit")
@@ -2225,7 +2229,9 @@ local function applyPBTempBuffAndHeal(forceBuff)
     if not activeChar or not abilityEvent then return end
 
     -- Apply all 3 tempbuffs (including Defensive boosts + stunDur = 999) once every 18s
-    if forceBuff or State.PB_LastBuffedChar ~= activeChar or (now - (State.PB_LastBuffTime or 0)) >= 18 then
+    -- v6.3: NEVER right after a level-up pick (6s quiet) — buff writes + server upgrade settlement in the same
+    -- tick is the exact pattern flagged by the game (user: kicked AFTER the pick even with click-only v6.2).
+    if not (tick() < (State.PB_QuietUntil or 0)) and (forceBuff or State.PB_LastBuffedChar ~= activeChar or (now - (State.PB_LastBuffTime or 0)) >= 18) then
         State.PB_LastBuffTime = now
         State.PB_LastBuffedChar = activeChar
         task.spawn(function()
@@ -2290,6 +2296,8 @@ end
 -- v5.5 Zero-Lag Throttle: a 999s stun only needs ONE fire per mob per 6s (the stun lasts 999s anyway!).
 -- This removes the repeated abilityHit spam (biggest network+CPU saving -> higher FPS, same protection).
 local function pbShouldSendStun(mob)
+    if tick() < (State.PB_QuietUntil or 0) then return false end -- v6.3 post-pick quiet: no stun right after a pick
+
     if not State.PB_LastStunSent then
         State.PB_LastStunSent = setmetatable({}, { __mode = "k" })
     end
@@ -2425,6 +2433,8 @@ end
 -- NEVER calls VirtualUser, firesignal, getconnections, or getsenv table iteration (which crash Delta Android!).
 -- Uses ONLY Roblox's native VirtualInputManager:SendMouseButtonEvent + Humanoid.Jump!
 local function pbPerformRealM1Attack()
+    if tick() < (State.PB_QuietUntil or 0) then return end -- v6.3 post-pick quiet: no server sends right after a level-up pick
+
     if not Config.PB_AutoClicker then return end
     local now = tick()
     if (now - (State.PB_LastM1Time or 0)) < 0.12 or State.PB_M1ClickInFlight then return end
@@ -2488,6 +2498,8 @@ end
 -- IMPORTANT: When PB_AutoClicker is ON, Loop 2G handles M1 Sword Button clicks (which trigger Character.localChar's native swing)!
 -- We NEVER spam swing:FireServer() from Lua while PB_AutoClicker is ON so Lua never interrupts or desyncs the Auto-Clicker sword swings!
 local function pbDamageModel(v, wpnDmg)
+    if tick() < (State.PB_QuietUntil or 0) then return end -- v6.3 post-pick quiet: no server sends right after a level-up pick
+
     if not v or not v:IsA("Model") or not v.Parent then return end
     local now = tick()
     if (now - (State.PB_LastRemoteHitTime or 0)) < 0.35 then
@@ -2813,6 +2825,8 @@ end
 
 -- Zero-Lag Owned Chest Opener (Exact thha3203 v2..v5 & Vortex_PixelBlade sub[35]: PlayerGui.gameUI.armory.inventory.clip.Loot)
 local function pbOpenAllChestsNow()
+    if tick() < (State.PB_QuietUntil or 0) then return end -- v6.3 post-pick quiet: no server sends right after a level-up pick
+
     if State.PB_OpeningChestsBusy then return end
     State.PB_OpeningChestsBusy = true
 
@@ -3498,7 +3512,7 @@ task.spawn(function()
     end
 end)
 
--- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v6.2 — CLICK-ONLY human mode: nothing is ever sent to the server)
+-- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v6.3 — click-only + 6s post-pick quiet + instant stop when popup closes)
 -- v5.9 STILL failed. Code audit (user: "افحص الكود") found the REAL root causes:
 --  (1) FATAL: `Camera` was NEVER defined in this script -> the line using Camera.ViewportSize inside pbFindPicksByLabel
 --      threw inside its own pcall -> ALL detected pick buttons were discarded -> picks ALWAYS nil -> nothing ever clicked.
@@ -3924,6 +3938,7 @@ local function pbClickUpgradePick(node, attempt, onScreen)
     local clicked = false
     local targets = pbBuildClickTargets(node)
     for _, obj in ipairs(targets) do
+        if not isGuiVisible(obj) then return clicked end -- popup already closed -> stop BEFORE any stray tap
         pcall(function()
             if fireclick then fireclick(obj); clicked = true end
         end)
@@ -3980,7 +3995,7 @@ local function pbClickUpgradePick(node, attempt, onScreen)
         local maxPts = (attempt <= 1) and 2 or (attempt == 2 and 4 or #tapSet)
         for i = 1, math.min(maxPts, #tapSet) do
             local o = tapSet[i]
-            if o and o.Parent then
+            if o and o.Parent and isGuiVisible(o) then
                 local x, y = pbScreenPointFor(o, applyInset)
                 pbTapMouse(x, y)
                 pbOSClickAt(x, y)
@@ -3988,7 +4003,7 @@ local function pbClickUpgradePick(node, attempt, onScreen)
             end
         end
         -- attempts >= 4: vertical sweep across the card — ANYWHERE on it accepts the pick (user rule)
-        if attempt >= 4 and cardT and cardT.Parent then
+        if attempt >= 4 and cardT and cardT.Parent and isGuiVisible(cardT) then
             local cx2, cy2 = pbScreenPointFor(cardT, applyInset)
             local ch = cardT.AbsoluteSize.Y
             for _, f in ipairs({ 0.32, 0.5, 0.7 }) do
@@ -4007,6 +4022,7 @@ task.spawn(function()
     local pickAttempts = 0
     local popupSince = 0
     local cooldownUntil = 0
+    local sawPickEpisode = false -- v6.3: popup closed AFTER we were clicking = successful pick -> quiet window
     while State.Running do
         task.wait(0.25)
         pcall(function()
@@ -4059,6 +4075,7 @@ task.spawn(function()
                 end
 
                 if picks then
+                    sawPickEpisode = true
                     pickAttempts = pickAttempts + 1
 
                     local bestI = 1
@@ -4100,6 +4117,13 @@ task.spawn(function()
                 State.PB_UpgradePopupOpen = false
                 State.PB_LastUpgradeScanTick = now
                 pickAttempts = 0
+                if sawPickEpisode then
+                    -- v6.3: THE PICK SUCCEEDED (popup gone). Freeze every server-sending PB loop for 6s so the
+                    -- game finishes its upgrade settlement cleanly before damage/stun/buff/chest traffic resumes.
+                    sawPickEpisode = false
+                    State.PB_QuietUntil = now + 6.0
+                    State.PB_DungeonStatusText = "✅ تم الاختيار — هدوء 6 ث بعد الرفع (حماية من الطرد)"
+                end
             end
         end)
     end
@@ -5306,8 +5330,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v6.2 | Pixel Blade [Auto-Pick Click-Only (Anti-Kick) + FPS Boost]"
-    or "⚔️ Delta Hub v6.2 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v6.3 | Pixel Blade [Auto-Pick + Post-Pick Quiet (Anti-Kick) + FPS Boost]"
+    or "⚔️ Delta Hub v6.3 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5676,7 +5700,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.2 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.3 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6301,4 +6325,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v6.2] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v6.3] Loaded! Active Game Detected: " .. tostring(CurrentGame))
