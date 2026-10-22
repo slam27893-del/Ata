@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v6.3 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v6.4 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.3)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.4)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -1667,9 +1667,9 @@ local function pbHitPillarModel(v)
     pcall(function()
         if prev and cur < prev then
             -- Pillar already cracking -> finish it instantly (exact Mana-scripts crate pattern)
-            onHit:FireServer(target, -math.huge, {}, 0)
+            onHit:FireServer(target, -1e30, {}, 0)
             if hum and hum ~= target then
-                onHit:FireServer(hum, -math.huge, {}, 0)
+                onHit:FireServer(hum, -1e30, {}, 0)
             end
         else
             onHit:FireServer(target, 9999999999, {}, 0)
@@ -2200,7 +2200,7 @@ local function pbBreakAllBreakablesRemotely()
                         if prevHP and curHP >= prevHP then
                             onHit:FireServer(hum, wpnDmg, {}, 0)
                         else
-                            onHit:FireServer(hum, -math.huge, {}, 0)
+                            onHit:FireServer(hum, -1e30, {}, 0)
                         end
                     end)
                     count = count + 1
@@ -2315,6 +2315,10 @@ end
 -- 3. Freezes gathered enemy WalkSpeed = 0 so monsters cannot walk into the player!
 local function pbProtectPlayerFromMonsters()
     if not Config.PB_PlayerProtection then return end
+    -- v6.4: during the 6s post-pick quiet, freeze the WHOLE protection loop (stun AND the replicated
+    -- CanTouch/WalkSpeed/Health property writes) — property spam in the same instant the server settles
+    -- the level-up was still tripping the game (user: kicked in v6.3 even with buffs/hitbox OFF).
+    if tick() < (State.PB_QuietUntil or 0) then return end
     refreshCharacterRefs()
     if not HumanoidRootPart then return end
 
@@ -2343,7 +2347,7 @@ local function pbProtectPlayerFromMonsters()
                         if abilityHit and stunnedCount < 6 and pbShouldSendStun(v) then
                             stunnedCount = stunnedCount + 1
                             pcall(function()
-                                abilityHit:FireServer(eHum, math.huge, { ["stun"] = { ["dur"] = 999 } })
+                                abilityHit:FireServer(eHum, 1e30, { ["stun"] = { ["dur"] = 999 } })
                             end)
                         end
                     end
@@ -2537,7 +2541,7 @@ local function pbDamageModel(v, wpnDmg)
         -- 2. Zero-Lag 999s Stun + Instant Damage on primary target (abilityHit WITHOUT useAbility("tornado") so 0 lag!)
         --    Throttled: re-send max once per 6s per mob (dur = 999s) — no packet spam while grinding the Boss!
         if abilityHit and hum and hum.Health > 0 and pbShouldSendStun(v) then
-            abilityHit:FireServer(hum, math.huge, { ["stun"] = { ["dur"] = 999 } })
+            abilityHit:FireServer(hum, 1e30, { ["stun"] = { ["dur"] = 999 } })
         end
         if useAbility and (v.Name == "Maneater" or v:FindFirstChild("worm")) then
             useAbility:FireServer("lunarSpell")
@@ -2564,7 +2568,7 @@ local function pbDamageModel(v, wpnDmg)
                                     onHit:FireServer(oHum, dmgVal, {}, 0)
                                 end
                                 if abilityHit and pbShouldSendStun(other) then
-                                    abilityHit:FireServer(oHum, math.huge, { ["stun"] = { ["dur"] = 999 } })
+                                    abilityHit:FireServer(oHum, 1e30, { ["stun"] = { ["dur"] = 999 } })
                                 end
                                 extraHits = extraHits + 1
                                 if extraHits >= 5 then break end
@@ -3512,7 +3516,7 @@ task.spawn(function()
     end
 end)
 
--- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v6.3 — click-only + 6s post-pick quiet + instant stop when popup closes)
+-- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v6.4 — no OS-mouse sim, finite payloads, 6s TOTAL post-pick quiet)
 -- v5.9 STILL failed. Code audit (user: "افحص الكود") found the REAL root causes:
 --  (1) FATAL: `Camera` was NEVER defined in this script -> the line using Camera.ViewportSize inside pbFindPicksByLabel
 --      threw inside its own pcall -> ALL detected pick buttons were discarded -> picks ALWAYS nil -> nothing ever clicked.
@@ -3912,25 +3916,6 @@ local function pbTapTouch(x, y)
 end
 
 -- v6.0: Delta-VERIFIED input functions (confirmed working on Delta Android): OS-level cursor click
-local function pbOSClickAt(x, y)
-    pcall(function()
-        if mousemoveabs and mouse1click then
-            mousemoveabs(x, y)
-            task.wait(0.02)
-            mouse1click()
-        end
-    end)
-    pcall(function()
-        if mousemoveabs and mouse1press and mouse1release then
-            mousemoveabs(x, y)
-            task.wait(0.02)
-            mouse1press()
-            task.wait(0.06)
-            mouse1release()
-        end
-    end)
-end
-
 -- THE clicker: fires every executor layer on the whole card chain, then taps MULTIPLE screen points on the card:
 -- text labels, PICK bar, icon image, card center (user: "خليه يضغط في النص وPICK وكذا — أي مكان يشتغل")
 local function pbClickUpgradePick(node, attempt, onScreen)
@@ -3998,7 +3983,6 @@ local function pbClickUpgradePick(node, attempt, onScreen)
             if o and o.Parent and isGuiVisible(o) then
                 local x, y = pbScreenPointFor(o, applyInset)
                 pbTapMouse(x, y)
-                pbOSClickAt(x, y)
                 if attempt >= 5 then pbTapTouch(x, y) end
             end
         end
@@ -4009,7 +3993,6 @@ local function pbClickUpgradePick(node, attempt, onScreen)
             for _, f in ipairs({ 0.32, 0.5, 0.7 }) do
                 local sy = math.floor(cy2 + (f - 0.5) * ch * 0.9)
                 pbTapMouse(cx2, sy)
-                pbOSClickAt(cx2, sy)
             end
         end
         clicked = true
@@ -5330,8 +5313,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v6.3 | Pixel Blade [Auto-Pick + Post-Pick Quiet (Anti-Kick) + FPS Boost]"
-    or "⚔️ Delta Hub v6.3 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v6.4 | Pixel Blade [Auto-Pick + Anti-Kick Hardening + FPS Boost]"
+    or "⚔️ Delta Hub v6.4 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5700,7 +5683,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.3 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.4 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6325,4 +6308,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v6.3] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v6.4] Loaded! Active Game Detected: " .. tostring(CurrentGame))
