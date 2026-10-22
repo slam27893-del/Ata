@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v6.5 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v6.6 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.5)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.6)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -4120,7 +4120,14 @@ task.spawn(function()
                     -- attempt-1 change was the remote sweep. Clicking the real UI is what actually picks; anything
                     -- else trips the game's remote/error handling -> Roblox auto-disconnect.)
                     if not inCooldown then
-                        State.PB_DungeonStatusText = "⬆️ اختيار الترقية: محاولة " .. tostring(pickAttempts) .. " — بطاقة " .. tostring(chosenIndex) .. " — وضع النقر فقط"
+                        local scTxt = ""
+                    local allZero = true
+                    for si = 1, math.min(#picks, 4) do
+                        scTxt = scTxt .. tostring(picks[si].score) .. "/"
+                        if picks[si].score ~= 0 then allZero = false end
+                    end
+                    State.PB_DungeonStatusText = "⬆️ محاولة " .. tostring(pickAttempts) .. " — بطاقة " .. tostring(chosenIndex)
+                        .. (allZero and (" | ما انقرأ نصوص [" .. scTxt .. "]") or (" | نقاط " .. scTxt))
                     end
                 else
                     -- popup visible but no buttons found yet -> keep trying & tell the user detection stage
@@ -4505,54 +4512,47 @@ local function pbCheckAndReplayDungeon(pbRemotes)
         and tostring(dfObj.Value)
         or (Config.PB_LastDungeonDiff or Config.PB_SelectedDifficulty or "Normal")
 
-    -- 1. Scan PlayerGui for any visible End-of-Dungeon / Victory / Play-Again / Replay button
+    -- 1. v6.6: full PlayerGui walk (gameUI Folder INCLUDED — the old ScreenGui-children loop NEVER saw the
+    -- WORLD CLEARED/PLAYER VOTES screen, that is why replay "ما تشتغل"). Match REPLAY / PLAY AGAIN / RETRY /
+    -- REJOIN buttons (never LEAVE/EXIT/QUIT). "world cleared / player votes / victory" TEXT alone = hard evidence
+    -- the vote screen is up: the server IGNORES playerTP while voting is pending, only the real button counts.
     local foundEndScreenBtn = nil
-    pcall(function()
-        local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
-        for _, gui in ipairs(PlayerGui:GetChildren()) do
-            if gui ~= State.HubScreenGui and gui:IsA("ScreenGui") and gui.Enabled then
-                for _, desc in ipairs(gui:GetDescendants()) do
-                    if desc:IsA("GuiButton") and isGuiVisible(desc) then
-                        local sz = desc.AbsoluteSize
-                        local pos = desc.AbsolutePosition
-                        if sz.X >= 35 and sz.Y >= 24 and pos.X >= 0 and pos.Y >= 0 and pos.X <= vp.X and pos.Y <= vp.Y then
-                            local txt = string.lower(desc.Name or "")
-                            if desc:IsA("TextButton") and desc.Text then
-                                txt = txt .. " " .. string.lower(desc.Text)
-                            end
-                            for _, sub in ipairs(desc:GetDescendants()) do
-                                if sub:IsA("TextLabel") and sub.Text then
-                                    txt = txt .. " " .. string.lower(sub.Text)
-                                end
-                            end
-                            local parentName = desc.Parent and string.lower(desc.Parent.Name or "") or ""
-                            local grandName = (desc.Parent and desc.Parent.Parent) and string.lower(desc.Parent.Parent.Name or "") or ""
-                            local inEndFrame = string.find(parentName, "end", 1, true)
-                                or string.find(parentName, "victory", 1, true)
-                                or string.find(parentName, "win", 1, true)
-                                or string.find(parentName, "result", 1, true)
-                                or string.find(parentName, "complete", 1, true)
-                                or string.find(parentName, "reward", 1, true)
-                                or string.find(grandName, "end", 1, true)
-                                or string.find(grandName, "victory", 1, true)
-                                or string.find(grandName, "result", 1, true)
-                                or string.find(grandName, "complete", 1, true)
-
-                            if string.find(txt, "play again", 1, true)
-                                or string.find(txt, "playagain", 1, true)
-                                or string.find(txt, "replay", 1, true)
-                                or string.find(txt, "retry", 1, true)
-                                or string.find(txt, "rejoin", 1, true)
-                                or (inEndFrame and (string.find(txt, "again", 1, true) or string.find(txt, "continue", 1, true))) then
-                                foundEndScreenBtn = desc
-                                return
-                            end
-                        end
+    local endScreenEvidence = false
+    local replayBtns = {}
+    pbEachUiObject(function(d)
+        if d:IsA("GuiText") then
+            local txt = pbNormTxt(d.Text) .. " " .. pbNormTxt(d.Name)
+            if string.find(txt, "world cleared", 1, true) or string.find(txt, "player votes", 1, true)
+                or string.find(txt, "dungeon cleared", 1, true) or string.find(txt, "victory", 1, true) then
+                endScreenEvidence = true
+            end
+        end
+        if d:IsA("GuiButton") then
+            local sz, pos = d.AbsoluteSize, d.AbsolutePosition
+            if sz.X >= 40 and sz.Y >= 20 and pos.X >= -10 and pos.Y >= -10 then
+                local txt = pbNormTxt(d.Name) .. " " .. (d:IsA("GuiText") and pbNormTxt(d.Text) or "")
+                for _, sub in ipairs(d:GetDescendants()) do
+                    if sub:IsA("GuiText") and sub.Text then
+                        txt = txt .. " " .. pbNormTxt(sub.Text)
                     end
+                end
+                txt = txt .. " " .. (d.Parent and pbNormTxt(d.Parent.Name) or "")
+                local isReplay = pbHasKeyword(txt, "replay") or pbHasKeyword(txt, "rejoin") or pbHasKeyword(txt, "retry")
+                    or string.find(txt, "play again", 1, true)
+                local isLeave = pbHasKeyword(txt, "leave") or pbHasKeyword(txt, "exit") or pbHasKeyword(txt, "quit")
+                if isReplay and not isLeave then
+                    table.insert(replayBtns, d)
                 end
             end
         end
     end)
+    if #replayBtns > 0 then
+        table.sort(replayBtns, function(a, b)
+            return a.AbsoluteSize.X * a.AbsoluteSize.Y < b.AbsoluteSize.X * b.AbsoluteSize.Y
+        end)
+        foundEndScreenBtn = replayBtns[1]
+        endScreenEvidence = true
+    end
 
     -- 2. v5.3: Count alive enemies OURSELVES (previous version reused State.PB_ZeroEnemySinceTick which only exists
     -- while Loop 2F Dungeon Auto-Farm is running, so Auto-Replay never triggered on its own!). Also track whether an
@@ -4612,9 +4612,10 @@ local function pbCheckAndReplayDungeon(pbRemotes)
     local diedAndWaiting = State.PB_DiedAtTick ~= nil and not inDungeonNow
         and (now - State.PB_DiedAtTick) >= 2.0 and (now - State.PB_DiedAtTick) <= 180
 
-    if foundEndScreenBtn or dungeonClearedDone or leftToLobby or diedAndWaiting then
-        -- Re-fire every 3.2s (proven AutoJoinPortal repeat-fire pattern) until the dungeon actually reopens
-        if (now - (State.PB_LastReplayFireTick or 0)) < 3.2 then
+    if foundEndScreenBtn or endScreenEvidence or dungeonClearedDone or leftToLobby or diedAndWaiting then
+        -- v6.6: while the vote screen is visible, re-fire every 1.1s (countdown pressure); legacy path stays 3.2s
+        local repGap = ((foundEndScreenBtn or endScreenEvidence) and 1.1) or 3.2
+        if (now - (State.PB_LastReplayFireTick or 0)) < repGap then
             return
         end
         State.PB_LastReplayFireTick = now
@@ -4640,20 +4641,20 @@ local function pbCheckAndReplayDungeon(pbRemotes)
             end
         end)
 
-        -- Click the visible Play Again / Replay UI button if present
-        if foundEndScreenBtn and foundEndScreenBtn.Parent and VirtualInputManager and not State.PB_M1ClickInFlight then
+        -- v6.6: click REPLAY with the FULL robust clicker (proven on the banner popup): fireclick/Activate/VIM
+        -- taps on the button, its inner label and its own frame center only — never the row's other half, so
+        -- LEAVE can NEVER be hit. Escalating layers across the 1.1s repeats.
+        if foundEndScreenBtn and foundEndScreenBtn.Parent then
+            State.PB_ReplayClickN = (State.PB_ReplayClickN or 0) + 1
             State.PB_M1ClickInFlight = true
+            State.PB_M1InFlightSince = tick()
             pcall(function()
-                local inset = GuiService:GetGuiInset()
-                local pos = foundEndScreenBtn.AbsolutePosition
-                local sz = foundEndScreenBtn.AbsoluteSize
-                local cx = math.floor(pos.X + sz.X * 0.5)
-                local cy = math.floor(pos.Y + sz.Y * 0.5 + inset.Y)
-                VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
-                task.wait(0.03)
-                VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+                pbClickUpgradePick(foundEndScreenBtn, State.PB_ReplayClickN, true)
             end)
+            task.wait(0.05)
             State.PB_M1ClickInFlight = false
+        else
+            State.PB_ReplayClickN = 0
         end
 
         -- Fire playerTP remote to restart the exact same Dungeon & Difficulty!
@@ -4670,6 +4671,19 @@ local function pbCheckAndReplayDungeon(pbRemotes)
         end)
     end
 end
+
+-- v6.6: dedicated Auto-Replay ticker (0.9s). The old 2.0s quest-loop call + 3.2s fire-gate was too slow for the
+-- PLAYER VOTES countdown, and its PlayerGui-children scan never even saw the gameUI Folder where this screen lives.
+task.spawn(function()
+    while State.Running do
+        task.wait(0.9)
+        if CurrentGame == "PixelBlade" and Config.PB_AutoReplayDungeon then
+            pcall(function()
+                pbCheckAndReplayDungeon(getPBRemotes())
+            end)
+        end
+    end
+end)
 
 -- v5.3 Auto-Replay support: remember when the player DIES so the finished/failed dungeon run is relaunched after respawn!
 pcall(function()
@@ -4697,12 +4711,7 @@ task.spawn(function()
                 pcall(pbOpenAllChestsNow)
             end
 
-            -- Auto Replay Dungeon when finished (إعادة الدنجن تلقائياً بعد الانتهاء)
-            if Config.PB_AutoReplayDungeon then
-                pcall(function()
-                    pbCheckAndReplayDungeon(pbRemotes)
-                end)
-            end
+            -- v6.6: replay now checked by its own dedicated 0.9s loop (below pbCheckAndReplayDungeon)
 
             -- Auto Open Wishes (Only when remainingWishes > 0, exact thha3203 v5)
             if Config.PB_AutoOpenWishes then
@@ -5345,8 +5354,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v6.5 | Pixel Blade [True Priority Order + Anti-Stick M1]"
-    or "⚔️ Delta Hub v6.5 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v6.6 | Pixel Blade [Auto-Replay REPLAY-Button Clicker + Priority Diag]"
+    or "⚔️ Delta Hub v6.6 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5715,7 +5724,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.5 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.6 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6340,4 +6349,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v6.5] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v6.6] Loaded! Active Game Detected: " .. tostring(CurrentGame))
