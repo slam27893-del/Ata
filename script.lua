@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v6.1 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v6.2 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.1)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.2)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -3498,7 +3498,7 @@ task.spawn(function()
     end
 end)
 
--- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v6.1 — PICKING WORKS; removed the layers that crashed the client)
+-- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v6.2 — CLICK-ONLY human mode: nothing is ever sent to the server)
 -- v5.9 STILL failed. Code audit (user: "افحص الكود") found the REAL root causes:
 --  (1) FATAL: `Camera` was NEVER defined in this script -> the line using Camera.ViewportSize inside pbFindPicksByLabel
 --      threw inside its own pcall -> ALL detected pick buttons were discarded -> picks ALWAYS nil -> nothing ever clicked.
@@ -4007,7 +4007,6 @@ task.spawn(function()
     local pickAttempts = 0
     local popupSince = 0
     local cooldownUntil = 0
-    local remoteSentThisEpisode = false
     while State.Running do
         task.wait(0.25)
         pcall(function()
@@ -4047,7 +4046,6 @@ task.spawn(function()
                 else
                     if not State.PB_UpgradePopupOpen then
                         popupSince = now
-                        remoteSentThisEpisode = false
                     end
                     State.PB_UpgradePopupOpen = true
                     -- ANTI-FREEZE: never keep the farm frozen longer than 12s
@@ -4055,7 +4053,6 @@ task.spawn(function()
                         State.PB_UpgradePopupOpen = false
                         cooldownUntil = now + 25.0
                         pickAttempts = 0
-                        remoteSentThisEpisode = false
                         State.PB_DungeonStatusText = "⚠️ النافذة ما انقفلت — أكمل الفارم (النقر مستمر بالخلفية)"
                         return
                     end
@@ -4086,42 +4083,12 @@ task.spawn(function()
                     task.wait(0.05)
                     State.PB_M1ClickInFlight = false
 
-                    -- v6.1 ANTI-KICK: keys + remotes fire ONLY ONCE per popup episode. Re-firing unknown remotes
-                    -- every 0.45s floods server-side errors, and Roblox auto-disconnects clients that spam errors.
-                    -- Remote names must match EXACTLY (loose "pick" substring fired Pickup/ItemPickup remotes with
-                    -- wrong argument types -> server errors). Screen tapping continues on every attempt as before.
-                    if not remoteSentThisEpisode then
-                        remoteSentThisEpisode = true
-                        pcall(function()
-                            if VirtualInputManager then
-                                local keyToSend = (chosenIndex == 1 and Enum.KeyCode.One) or (chosenIndex == 3 and Enum.KeyCode.Three) or Enum.KeyCode.Two
-                                VirtualInputManager:SendKeyEvent(true, keyToSend, false, game)
-                                task.wait(0.03)
-                                VirtualInputManager:SendKeyEvent(false, keyToSend, false, game)
-                            end
-                        end)
-                        local pbRemotes = getPBRemotes()
-                        if pbRemotes then
-                            local upgRemote = pbRemotes:FindFirstChild("plrUpgrade")
-                            if upgRemote then
-                                pcall(function() upgRemote:FireServer(chosenIndex) end)
-                            end
-                            for _, rem in ipairs(pbRemotes:GetChildren()) do
-                                local rn = string.lower(rem.Name)
-                                local safeName = (rn == "pick" or rn == "choose" or rn == "select"
-                                    or string.find(rn, "banner", 1, true) or string.find(rn, "choose", 1, true)
-                                    or string.find(rn, "upgrade", 1, true))
-                                if safeName and rem:IsA("RemoteEvent") and rem ~= upgRemote then
-                                    pcall(function()
-                                        rem:FireServer(chosenIndex)
-                                    end)
-                                end
-                            end
-                        end
-                    end
-
+                    -- v6.2 HUMAN-ONLY MODE: NO remotes, NO digit keys — ZERO server-facing injection from auto-pick.
+                    -- (v6.0: kicks arrived right after a successful pick; v6.1: kick arrived ON attempt 1 — the only
+                    -- attempt-1 change was the remote sweep. Clicking the real UI is what actually picks; anything
+                    -- else trips the game's remote/error handling -> Roblox auto-disconnect.)
                     if not inCooldown then
-                        State.PB_DungeonStatusText = "⬆️ اختيار الترقية: محاولة " .. tostring(pickAttempts) .. " — بطاقة " .. tostring(chosenIndex) .. " (نص+صورة+PICK)"
+                        State.PB_DungeonStatusText = "⬆️ اختيار الترقية: محاولة " .. tostring(pickAttempts) .. " — بطاقة " .. tostring(chosenIndex) .. " — وضع النقر فقط"
                     end
                 else
                     -- popup visible but no buttons found yet -> keep trying & tell the user detection stage
@@ -5339,8 +5306,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v6.1 | Pixel Blade [Auto-Pick + Crash-Safe Clicker + FPS Boost]"
-    or "⚔️ Delta Hub v6.1 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v6.2 | Pixel Blade [Auto-Pick Click-Only (Anti-Kick) + FPS Boost]"
+    or "⚔️ Delta Hub v6.2 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5709,7 +5676,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.1 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.2 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6334,4 +6301,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v6.1] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v6.2] Loaded! Active Game Detected: " .. tostring(CurrentGame))
