@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v6.9 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v7.0 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.9)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.0)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -1701,7 +1701,16 @@ local function isPBTrueEnemy(mob, isRaid, allowNearbyNoAttribute)
     end
     local allyMark = allyCache[mob]
     if allyMark == nil then
-        allyMark = isPBPlayerModel(mob) and true or false
+        allyMark = isPBPlayerModel(mob)
+        if not allyMark then
+            -- v7.0 NPC ALLY-BOT GUARD (user: raid allies are GAME BOTS, not players — GetPlayerFromCharacter
+            -- misses them): Pixel Blade mobs never use a Roblox player rig, so any foreign model built like a
+            -- player character (Head + Torso/UpperTorso + arms) is a friendly -> never target/stun/follow it.
+            allyMark = mob:FindFirstChild("Head") ~= nil
+                and (mob:FindFirstChild("Torso") ~= nil or mob:FindFirstChild("UpperTorso") ~= nil)
+                and (mob:FindFirstChild("Left Arm") ~= nil or mob:FindFirstChild("LeftLowerArm") ~= nil)
+        end
+        allyMark = allyMark and true or false
         allyCache[mob] = allyMark
     end
     if allyMark then return false end
@@ -2024,6 +2033,33 @@ local function findBestPBTarget(isRaid)
                     if prevHP and watchHum.Health < prevHP - 0.5 then
                         lockedMap[v] = nil
                         invulnMap[v] = nil
+                    end
+                end
+
+                -- v7.0 NO-DAMAGE STALE WATCH (self-healing anti-freeze): a model whose Health never moves while
+                -- we hammer it at melee range for 7 straight seconds is NOT damageable (ally bot, decoration,
+                -- scripted-invulnerable). Ban it 25s (120s on repeat) instead of wedging in place forever.
+                -- Real mobs always bleed; boss names excluded (legit invulnerable phases).
+                if PB_BOSS_NAMES[v.Name] ~= true and (not ignoreUntil or now >= ignoreUntil) then
+                    local hum0 = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
+                    if hum0 and hum0.Health > 0 and distFromMe <= 55 then
+                        if not State.PB_MobStale then
+                            State.PB_MobStale = setmetatable({}, { __mode = "k" })
+                        end
+                        if not State.PB_MobStaleStrikes then
+                            State.PB_MobStaleStrikes = setmetatable({}, { __mode = "k" })
+                        end
+                        local stw = State.PB_MobStale[v]
+                        if stw and stw.hp == hum0.Health then
+                            if now - stw.since >= 7.0 then
+                                local strikes = (State.PB_MobStaleStrikes[v] or 0) + 1
+                                State.PB_MobStaleStrikes[v] = strikes
+                                invulnMap[v] = now + (strikes >= 2 and 120 or 25)
+                                State.PB_MobStale[v] = nil
+                            end
+                        else
+                            State.PB_MobStale[v] = { hp = hum0.Health, since = now }
+                        end
                     end
                 end
 
@@ -3714,6 +3750,41 @@ local function pbCardRootFor(node)
     return root
 end
 
+-- v7.0 SPATIAL BAND SCORING (THE definitive priority fix): hierarchy links between a PICK button and its card
+-- text are unreliable (shared containers / deep frames) which left every card reading "PICK" only -> scores
+-- 0/0/0 -> ALWAYS leftmost (user: "يختار دائما اليسار"). Instead we bind text to cards by SCREEN POSITION:
+-- every pick node defines a card column (boundaries = midpoints between adjacent centers) and ANY readable
+-- string inside that column above the PICK bar — real GuiText, meaningful instance NAMES, attribute strings,
+-- hidden StringValues — becomes the card's text, regardless of how weird the DOM is.
+local function pbBandRescore(picks, texts, vp)
+    if not picks or #picks < 2 or not texts or #texts == 0 then return end
+    pcall(function()
+        local n = #picks
+        for i = 1, n do
+            local posB, szB = picks[i].btn.AbsolutePosition, picks[i].btn.AbsoluteSize
+            picks[i].cx = posB.X + szB.X * 0.5
+            picks[i].botY = posB.Y + szB.Y
+        end
+        table.sort(picks, function(a, b) return a.cx < b.cx end)
+        for i = 1, n do
+            local left = (i == 1) and -1e9 or (picks[i - 1].cx + picks[i].cx) * 0.5
+            local right = (i == n) and 1e9 or (picks[i].cx + picks[i + 1].cx) * 0.5
+            local topY = picks[i].botY - vp.Y * 0.66
+            local joined = ""
+            for t = 1, #texts do
+                local it = texts[t]
+                if it.x >= left and it.x < right and it.y <= picks[i].botY + 8 and it.y >= topY then
+                    joined = joined .. " " .. it.s
+                end
+            end
+            if joined ~= "" then
+                picks[i].score = pbScoreCardText(joined)
+                picks[i].rawTxt = joined
+            end
+        end
+    end)
+end
+
 -- v6.0: single walker over ALL visible PlayerGui UI objects (Folders like `gameUI` INCLUDED),
 -- skipping the hub GUI and disabled ScreenGuis. One GetDescendants pass, shared by all detectors.
 local function pbEachUiObject(fn)
@@ -3799,6 +3870,9 @@ local function pbScanUpgradePopup(strongEvidence)
     local nodes, btns, cards = {}, {}, {}
     local anyPickLabel = false
     local anyBannerWord = false
+    local texts = {}
+    local genNames = { frame=1, image=1, imagelabel=1, textlabel=1, textbutton=1, imagebutton=1, button=1,
+        ui=1, gui=1, panel=1, main=1, bg=1, background=1, icon=1, rect=1, container=1, content=1, holder=1 }
     pbEachUiObject(function(d)
         local sz, pos = d.AbsoluteSize, d.AbsolutePosition
         if sz.X >= 24 and sz.Y >= 10 then
@@ -3807,6 +3881,32 @@ local function pbScanUpgradePopup(strongEvidence)
                 ownText = pbNormTxt(d.Text)
             end
             local nameLow = pbNormTxt(d.Name)
+            -- v7.0: harvest EVERY readable string near the popup (text, instance name, attribute values) for
+            -- the spatial band scorer — generic container names excluded so only card-meaning words survive.
+            if #texts < 240 then
+                local extra = ""
+                if ownText ~= "" and #ownText >= 2 then
+                    extra = extra .. " " .. ownText
+                end
+                if #nameLow >= 3 and not genNames[nameLow] then
+                    extra = extra .. " " .. nameLow
+                end
+                pcall(function()
+                    local an = d:GetAttributeNames()
+                    for ai = 1, an and #an or 0 do
+                        local anm = an[ai]
+                        local av = d:GetAttribute(anm)
+                        if type(av) == "string" and #av >= 2 then
+                            extra = extra .. " " .. pbNormTxt(av)
+                        elseif anm and #anm >= 3 and not genNames[pbNormTxt(anm)] then
+                            extra = extra .. " " .. pbNormTxt(anm)
+                        end
+                    end
+                end)
+                if extra ~= "" then
+                    table.insert(texts, { x = pos.X + sz.X * 0.5, y = pos.Y + sz.Y * 0.5, s = extra })
+                end
+            end
             for _, kw in ipairs(PB_PICK_KWS) do
                 if pbHasKeyword(ownText, kw) or pbHasKeyword(nameLow, kw) then
                     anyPickLabel = true
@@ -3870,6 +3970,7 @@ local function pbScanUpgradePopup(strongEvidence)
         end
     end
     if #picks >= 2 then
+        pbBandRescore(picks, texts, vp)
         table.sort(picks, function(a, b) return a.x < b.x end)
         return picks, anyPickLabel, anyBannerWord
     end
@@ -3894,6 +3995,7 @@ local function pbScanUpgradePopup(strongEvidence)
             table.insert(rowPicks, { btn = it.obj, score = sc, x = it.x, onScreen = true, rawTxt = txt })
         end
         if accept then
+            pbBandRescore(rowPicks, texts, vp)
             return rowPicks, anyPickLabel, anyBannerWord
         end
     end
@@ -3917,6 +4019,7 @@ local function pbScanUpgradePopup(strongEvidence)
         end
     end
     if #picks >= 2 then
+        pbBandRescore(picks, texts, vp)
         table.sort(picks, function(a, b) return a.x < b.x end)
         return picks, anyPickLabel, anyBannerWord
     end
@@ -5456,8 +5559,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v6.9 | Pixel Blade [Settled-Cards Priority Pick + Inset-Fixed Sword Tap]"
-    or "⚔️ Delta Hub v6.9 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v7.0 | Pixel Blade [Band-Read Priority + Ally-Bot Safe]"
+    or "⚔️ Delta Hub v7.0 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5826,7 +5929,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.9 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.0 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6451,4 +6554,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v6.9] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v7.0] Loaded! Active Game Detected: " .. tostring(CurrentGame))
