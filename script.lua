@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v6.4 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v6.5 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.4)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.5)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -2315,7 +2315,7 @@ end
 -- 3. Freezes gathered enemy WalkSpeed = 0 so monsters cannot walk into the player!
 local function pbProtectPlayerFromMonsters()
     if not Config.PB_PlayerProtection then return end
-    -- v6.4: during the 6s post-pick quiet, freeze the WHOLE protection loop (stun AND the replicated
+    -- v6.4: during the 2.5s post-pick quiet, freeze the WHOLE protection loop (stun AND the replicated
     -- CanTouch/WalkSpeed/Health property writes) — property spam in the same instant the server settles
     -- the level-up was still tripping the game (user: kicked in v6.3 even with buffs/hitbox OFF).
     if tick() < (State.PB_QuietUntil or 0) then return end
@@ -2441,6 +2441,11 @@ local function pbPerformRealM1Attack()
 
     if not Config.PB_AutoClicker then return end
     local now = tick()
+    -- v6.5 watchdog: PB_M1ClickInFlight used to be able to stay true forever if the release thread died
+    -- (that was the "auto-clicker hangs after the pick" report) -> stale flag now expires after 1.5s.
+    if State.PB_M1ClickInFlight and (now - (State.PB_M1InFlightSince or 0)) >= 1.5 then
+        State.PB_M1ClickInFlight = false
+    end
     if (now - (State.PB_LastM1Time or 0)) < 0.12 or State.PB_M1ClickInFlight then return end
     State.PB_LastM1Time = now
 
@@ -2453,6 +2458,7 @@ local function pbPerformRealM1Attack()
         -- 2. Pure Screen Auto-Clicker via VirtualInputManager ONLY (Press -> 0.02s -> Release, strictly 1-at-a-time!)
         if VirtualInputManager then
             State.PB_M1ClickInFlight = true
+            State.PB_M1InFlightSince = tick()
             task.spawn(function()
                 pcall(function()
                     local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
@@ -3550,43 +3556,48 @@ local function pbHasKeyword(t, kw)
     return false
 end
 
-local PB_UPGRADE_PRIORITY = {
-    { pts = 10, kws = { "rage", "spirit", "spirits" } },
-    { pts = 9,  kws = { "capacity" } },
-    { pts = 8,  kws = { "stamina" } },
-    { pts = 7,  kws = { "flame", "flames" } },
-    { pts = 6,  kws = { "life steal", "lifesteal", "steal", "steals" } },
-    { pts = 5,  kws = { "poison" } },
-    { pts = 4,  kws = { "frost", "element circle", "circle" } },
-    { pts = 3,  kws = { "recovery", "critical", "crit" } },
-    { pts = 2,  kws = { "health", "agility" } },
+-- v6.5 user ranking, EXACT order, first-match-wins (a card scores by the FIRST rule it matches — never
+-- additive, so foreign words from other cards can never inflate it): 13 Spirit Capacity > 12 Rage Spirits >
+-- 11 Life Steal > 10 Stamina > 9 Flame > 8 Poison > 7 Element Circle > 6 Frost > 5 Critical Boost >
+-- 4 Recovery > 3 Health Boost > 2 Agility > 1 Thorns. Potions -5, reroll/robux/shop -1000.
+local PB_UPGRADE_RULES = {
+    { pts = 13, kws = { "capacity", "spirits held", "spirit held", "max spirits", "more spirits" } },
+    { pts = 12, kws = { "rage" } },
+    { pts = 11, kws = { "life steal", "lifesteal", "heal per", "steal", "steals" } },
+    { pts = 10, kws = { "stamina" } },
+    { pts = 9,  kws = { "flame", "flames" } },
+    { pts = 8,  kws = { "poison" } },
+    { pts = 7,  kws = { "element circle", "circle", "elemental aura" } },
+    { pts = 6,  kws = { "frost" } },
+    { pts = 5,  kws = { "critical", "crit" } },
+    { pts = 4,  kws = { "recovery", "cooldown" } },
+    { pts = 3,  kws = { "health", "hp" } },
+    { pts = 2,  kws = { "agility", "dodge" } },
     { pts = 1,  kws = { "thorn", "thorns" } },
 }
 
 local function pbScoreCardText(txt)
-    local score = 0
-    for _, tier in ipairs(PB_UPGRADE_PRIORITY) do
-        local hit = false
-        for _, kw in ipairs(tier.kws) do
+    if string.find(txt, "reroll", 1, true) or string.find(txt, "robux", 1, true) or string.find(txt, "shop", 1, true) then
+        return -1000
+    end
+    if pbHasKeyword(txt, "potion") then
+        return -5
+    end
+    for _, rule in ipairs(PB_UPGRADE_RULES) do
+        for _, kw in ipairs(rule.kws) do
             if pbHasKeyword(txt, kw) then
-                hit = true
-                break
+                return rule.pts
             end
         end
-        if hit then
-            score = score + tier.pts
-        end
     end
-    if pbHasKeyword(txt, "potion") then score = score - 5 end
-    if string.find(txt, "reroll", 1, true) or string.find(txt, "robux", 1, true) or string.find(txt, "shop", 1, true) then
-        score = -1000
-    end
-    return score
+    return 0
 end
 
 local PB_PICK_KWS = { "pick", "choose", "select" }
 
--- Descriptive text of a card = own text/descendants' labels + ancestor frames' sibling labels/names
+-- v6.5 SCOPED card text: the card's OWN labels only (title + effect + pick live inside the scroll card).
+-- The old 4-level ancestor walk made every card inherit the sibling cards' text (shared container) -> equal
+-- scores -> always "leftmost" -> "ما ياخذ بالأولوية".
 local function pbCollectCardText(node)
     local cardText = ""
     pcall(function()
@@ -3598,17 +3609,8 @@ local function pbCollectCardText(node)
             if sub:IsA("GuiText") and sub.Text then
                 cardText = cardText .. " " .. pbNormTxt(sub.Text)
             end
-        end
-        local anc = node.Parent
-        for _ = 1, 4 do
-            if anc then
-                for _, sib in ipairs(anc:GetChildren()) do
-                    if sib:IsA("GuiText") and sib.Text then
-                        cardText = cardText .. " " .. pbNormTxt(sib.Text)
-                    end
-                end
-                cardText = cardText .. " " .. pbNormTxt(anc.Name)
-                anc = anc.Parent
+            if sub:IsA("GuiButton") then
+                cardText = cardText .. " " .. pbNormTxt(sub.Name)
             end
         end
     end)
@@ -3622,6 +3624,34 @@ local function pbGetVP()
     end)
     if ok and vp and vp.X > 100 then return vp end
     return Vector2.new(1280, 720)
+end
+
+-- v6.5: climb from a pick node up to ITS card root: stop at frames wider than 60% of the screen OR at any
+-- parent holding 2+ similarly-sized siblings (that parent is the shared row container, not the card).
+local function pbCardRootFor(node)
+    local vp = pbGetVP()
+    local root = node
+    pcall(function()
+        local p = node.Parent
+        for _ = 1, 5 do
+            if not p or not p:IsA("GuiObject") then break end
+            local psz, rsz = p.AbsoluteSize, root.AbsoluteSize
+            if psz.X > vp.X * 0.60 or psz.Y < rsz.Y then break end
+            local similar = 0
+            for _, sib in ipairs(p:GetChildren()) do
+                if sib:IsA("GuiObject") and sib ~= root then
+                    local ssz = sib.AbsoluteSize
+                    if ssz.X >= rsz.X * 0.55 and ssz.X <= rsz.X * 1.8 and ssz.Y >= rsz.Y * 0.6 then
+                        similar = similar + 1
+                    end
+                end
+            end
+            if similar >= 2 then break end
+            root = p
+            p = p.Parent
+        end
+    end)
+    return root
 end
 
 -- v6.0: single walker over ALL visible PlayerGui UI objects (Folders like `gameUI` INCLUDED),
@@ -3771,7 +3801,7 @@ local function pbScanUpgradePopup(strongEvidence)
             local pos2, sz2 = btn.AbsolutePosition, btn.AbsoluteSize
             table.insert(picks, {
                 btn = btn,
-                score = pbScoreCardText(pbCollectCardText(btn)),
+                score = pbScoreCardText(pbCollectCardText(pbCardRootFor(btn))),
                 x = pos2.X,
                 onScreen = (pos2.X > -40 and pos2.Y > -40 and pos2.X < vp.X + 40 and pos2.Y < vp.Y + 40 and sz2.X >= 20),
             })
@@ -3812,9 +3842,10 @@ local function pbScanUpgradePopup(strongEvidence)
         for _, it in ipairs(gBars.items) do
             if not seen[it.obj] then
                 seen[it.obj] = true
+                local barCard = (it.obj:IsA("GuiButton") and it.obj.AbsoluteSize.Y < pbGetVP().Y * 0.2) and pbCardRootFor(it.obj) or it.obj
                 table.insert(picks, {
                     btn = it.obj,
-                    score = pbScoreCardText(pbCollectCardText(it.obj)),
+                    score = pbScoreCardText(pbCollectCardText(barCard)),
                     x = it.x,
                     onScreen = true,
                 })
@@ -4079,6 +4110,7 @@ task.spawn(function()
                     local chosenIndex = math.clamp(bestI, 1, 3)
 
                     State.PB_M1ClickInFlight = true
+                    State.PB_M1InFlightSince = tick()
                     pbClickUpgradePick(chosen.btn, pickAttempts, chosen.onScreen ~= false)
                     task.wait(0.05)
                     State.PB_M1ClickInFlight = false
@@ -4104,8 +4136,8 @@ task.spawn(function()
                     -- v6.3: THE PICK SUCCEEDED (popup gone). Freeze every server-sending PB loop for 6s so the
                     -- game finishes its upgrade settlement cleanly before damage/stun/buff/chest traffic resumes.
                     sawPickEpisode = false
-                    State.PB_QuietUntil = now + 6.0
-                    State.PB_DungeonStatusText = "✅ تم الاختيار — هدوء 6 ث بعد الرفع (حماية من الطرد)"
+                    State.PB_QuietUntil = now + 2.5
+                    State.PB_DungeonStatusText = "✅ تم الاختيار — هدوء قصير ثم عودة الفارم"
                 end
             end
         end)
@@ -5313,8 +5345,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v6.4 | Pixel Blade [Auto-Pick + Anti-Kick Hardening + FPS Boost]"
-    or "⚔️ Delta Hub v6.4 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v6.5 | Pixel Blade [True Priority Order + Anti-Stick M1]"
+    or "⚔️ Delta Hub v6.5 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5683,7 +5715,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.4 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.5 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6308,4 +6340,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v6.4] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v6.5] Loaded! Active Game Detected: " .. tostring(CurrentGame))
