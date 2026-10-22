@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v6.7 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v6.8 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.7)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.8)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -1691,6 +1691,20 @@ end
 
 local function isPBTrueEnemy(mob, isRaid, allowNearbyNoAttribute)
     if not mob or not mob:IsA("Model") then return false end
+    -- v6.8 ALLY GUARD (user: "ريد يطلع حلفاء فالسكربت يقعد يحاول يهجم الحلفاء فيعلق"): every REAL Roblox player
+    -- in the dungeon/raid is a friendly co-op fighter — never targetable, never followable. Cached per model
+    -- (weak table, zero per-scan cost after first check). Kills the ally-chasing freeze AND wasted swings.
+    local allyCache = State.PB_AllyCache
+    if not allyCache then
+        allyCache = setmetatable({}, { __mode = "k" })
+        State.PB_AllyCache = allyCache
+    end
+    local allyMark = allyCache[mob]
+    if allyMark == nil then
+        allyMark = isPBPlayerModel(mob) and true or false
+        allyCache[mob] = allyMark
+    end
+    if allyMark then return false end
     if isPBChestModel(mob) or isPBBreakableModel(mob) or isPBIgnoredModel(mob) then return false end
     if not isPBMobAlive(mob) then return false end
 
@@ -3648,6 +3662,14 @@ local function pbCollectCardText(node)
             if sub:IsA("GuiButton") then
                 cardText = cardText .. " " .. pbNormTxt(sub.Name)
             end
+            -- v6.8: when the pixel-art labels are unreadable Images, the OFFER NAME usually still lives in hidden
+            -- StringValues / named children bound to the card data ("SpiritCapacity", "RageSpirits", ...)
+            if sub:IsA("ValueBase") then
+                cardText = cardText .. " " .. pbNormTxt(sub.Name)
+                if sub:IsA("StringValue") then
+                    cardText = cardText .. " " .. pbNormTxt(tostring(sub.Value))
+                end
+            end
         end
     end)
     return cardText
@@ -3828,9 +3850,11 @@ local function pbScanUpgradePopup(strongEvidence)
         if btn and not seen[btn] then
             seen[btn] = true
             local pos2, sz2 = btn.AbsolutePosition, btn.AbsoluteSize
+            local cardTxt1 = pbCollectCardText(pbCardRootFor(btn))
             table.insert(picks, {
                 btn = btn,
-                score = pbScoreCardText(pbCollectCardText(pbCardRootFor(btn))),
+                score = pbScoreCardText(cardTxt1),
+                rawTxt = cardTxt1,
                 x = pos2.X,
                 onScreen = (pos2.X > -40 and pos2.Y > -40 and pos2.X < vp.X + 40 and pos2.Y < vp.Y + 40 and sz2.X >= 20),
             })
@@ -3858,7 +3882,7 @@ local function pbScanUpgradePopup(strongEvidence)
                 end
             end
             if hasPick or (sc > 0 and strongEvidence) or #gCards.items == 3 then accept = true end
-            table.insert(rowPicks, { btn = it.obj, score = sc, x = it.x, onScreen = true })
+            table.insert(rowPicks, { btn = it.obj, score = sc, x = it.x, onScreen = true, rawTxt = txt })
         end
         if accept then
             return rowPicks, anyPickLabel, anyBannerWord
@@ -3872,9 +3896,11 @@ local function pbScanUpgradePopup(strongEvidence)
             if not seen[it.obj] then
                 seen[it.obj] = true
                 local barCard = (it.obj:IsA("GuiButton") and it.obj.AbsoluteSize.Y < pbGetVP().Y * 0.2) and pbCardRootFor(it.obj) or it.obj
+                local btxt = pbCollectCardText(barCard)
                 table.insert(picks, {
                     btn = it.obj,
-                    score = pbScoreCardText(pbCollectCardText(barCard)),
+                    score = pbScoreCardText(btxt),
+                    rawTxt = btxt,
                     x = it.x,
                     onScreen = true,
                 })
@@ -4155,8 +4181,15 @@ task.spawn(function()
                         scTxt = scTxt .. tostring(picks[si].score) .. "/"
                         if picks[si].score ~= 0 then allZero = false end
                     end
+                    local snip = ""
+                    if allZero then
+                        for si = 1, math.min(#picks, 3) do
+                            local t = string.gsub(picks[si].rawTxt or "", "^%s+", "")
+                            snip = snip .. "[" .. (t ~= "" and string.sub(t, 1, 16) or "خالي") .. "]"
+                        end
+                    end
                     State.PB_DungeonStatusText = "⬆️ محاولة " .. tostring(pickAttempts) .. " — بطاقة " .. tostring(chosenIndex)
-                        .. (allZero and (" | ما انقرأ نصوص [" .. scTxt .. "]") or (" | نقاط " .. scTxt))
+                        .. (allZero and (" | ما انقرأ — " .. scTxt .. snip) or (" | نقاط " .. scTxt))
                     end
                 else
                     -- popup visible but no buttons found yet -> keep trying & tell the user detection stage
@@ -5394,8 +5427,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v6.7 | Pixel Blade [Jump-Every-Swing + No Wasted Hits + Fast Replay]"
-    or "⚔️ Delta Hub v6.7 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v6.8 | Pixel Blade [Ally-Safe Raids + Priority Readout + Jump-Every-Swing]"
+    or "⚔️ Delta Hub v6.8 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5764,7 +5797,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.7 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.8 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6389,4 +6422,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v6.7] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v6.8] Loaded! Active Game Detected: " .. tostring(CurrentGame))
