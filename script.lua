@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v5.8 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v5.9 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v5.8)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v5.9)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -3501,20 +3501,23 @@ task.spawn(function()
     end
 end)
 
--- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v5.8 — structure-proof PICK clicker + geometry fallback + anti-freeze)
+-- 2C. Dedicated Pixel Blade Auto Pick Upgrades Loop (v5.9 — CLICK THE WHOLE CARD/IMAGE + touch sim + anti-freeze)
 -- v5.7 STILL failed on the "CHOOSE BANNER / LEVEL UP" popup (player stood frozen, nothing picked). Root causes now
 -- all covered: (1) "PICK" can be an ImageLabel/pixel-art (no .Text ANYWHERE) -> pure text matching finds nothing;
 -- (2) the real clickable can be the card frame ABOVE the label; (3) the popup Gui may use IgnoreGuiInset, making the
 -- click coordinates land elsewhere; (4) if the frame was parked off-screen by an old config, clicks land on nothing;
 -- (5) a stale "popup open" flag froze the farm forever.
--- v5.8 DESIGN (zero new UI options, zero lag: 1 scan per 0.45s only while PB_AutoUpgrade is ON):
+-- v5.9 DESIGN (zero new UI options, zero lag: 1 scan per 0.45s only while PB_AutoUpgrade is ON):
+--   USER RULE: the popup accepts a click ANYWHERE on a card (its image/frame) — not just the PICK bar.
+--   So every click walks the full card chain (pick node -> ancestors -> icon images) and taps real
+--   screen coordinates with BOTH mouse sim and Android touch sim (VirtualUser is Delta-Android-unsafe).
 --   A. Text/name matching: GuiButton OR its child labels OR its Name contains pick/choose/select (word boundaries).
 --   B. GEOMETRY fallback (works with NO text at all): while the game is paused (inCutscene) find the popup's row of
 --      2..4 similar wide short buttons in the middle screen band (the three PICK bars) and click the best-scored card.
 --   C. Priority table (user's exact order): Rage Spirits 1 > Spirit Capacity 2 > Stamina 3 > Flame Element 4 >
 --      Life Steal 5 > Poison Element 6 > Element Circle/Frost 7 > Recovery/Critical 8 > Health/Agility 9 > Thorns 10.
---   D. Escalating click layers per attempt: fireclick -> VirtualInput (alternating GuiInset, on-screen only) ->
---      touchTap (>=2) -> firesignal MouseButton1Click (>=3); plus legacy keys One/Two/Three + plrUpgrade remote.
+--   D. Escalating layers: fireclick+Activate on chain -> touchTap (>=2) -> input-signal sweep (>=3) -> screen
+--      taps at pick/card/icon centers with inset auto-fix -> legacy keys + plrUpgrade/banner remotes.
 --   E. Safety: popup flag auto-clears if scan stops; farm resumes after 12s even if popup never closes (never frozen!).
 
 local function pbNormTxt(t)
@@ -3736,47 +3739,271 @@ local function pbFindPicksByGeometry()
     return picks
 end
 
-local function pbClickUpgradePick(btn, attempt, onScreen)
-    if not btn or not btn.Parent then return false end
-    local clicked = false
+-- v5.9: USER RULE — "you can click ANYWHERE in the choice area, no need for the PICK word — just click the image".
+-- So the clicker targets the WHOLE CARD: the pick node, every ancestor frame up to the card root (max 5 up), the big
+-- icon image inside it, and taps real SCREEN COORDINATES (mouse sim + Android touch sim) at card/icon centers.
+-- Chain building is done at CLICK time (fresh refs), never at scan time.
+
+-- Build the full clickable chain for a node: node + ancestors (until popup container) + big images inside card frame
+local function pbBuildClickTargets(node)
+    local targets = {}
+    local seenT = {}
+    local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
     pcall(function()
-        if fireclick then
-            fireclick(btn)
-            clicked = true
+        local cur = node
+        for _ = 1, 5 do
+            if not cur or seenT[cur] or not cur:IsA("GuiObject") then break end
+            local sz = cur.AbsoluteSize
+            if sz.X > vp.X * 0.55 or sz.Y > vp.Y * 0.97 then break end -- reached popup container = stop climbing
+            seenT[cur] = true
+            table.insert(targets, cur)
+            if sz.Y >= 110 then -- card-sized frame: grab its icon images (the user: click the image!)
+                local got = 0
+                for _, d in ipairs(cur:GetDescendants()) do
+                    if got >= 2 then break end
+                    if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and not seenT[d] then
+                        local dsz = d.AbsoluteSize
+                        if dsz.X >= 32 and dsz.Y >= 32 and dsz.X <= vp.X * 0.45 then
+                            seenT[d] = true
+                            table.insert(targets, d)
+                            got = got + 1
+                        end
+                    end
+                end
+            end
+            if cur:IsA("ScreenGui") then break end
+            local p = cur.Parent
+            if not p or p:IsA("PlayerGui") or p:IsA("StarterGui") or p:IsA("CoreObject") then break end
+            cur = p
         end
     end)
+    if #targets == 0 then table.insert(targets, node) end
+    return targets
+end
+
+-- Screen pixel point of an element's center. If the hosting ScreenGui does NOT ignore the GuiInset, the inset must be
+-- added (mobile notches shift everything; this exact bug made earlier clicks land on empty space).
+local function pbScreenPointFor(obj, applyInset)
+    local fx, fy = 0, 0
     pcall(function()
-        if VirtualInputManager and onScreen then
-            local inset = GuiService:GetGuiInset()
-            local pos = btn.AbsolutePosition
-            local sz = btn.AbsoluteSize
-            local cx = math.floor(pos.X + sz.X * 0.5)
-            local cyRaw = math.floor(pos.Y + sz.Y * 0.5)
-            local useInset = ((attempt % 2) == 1)
-            local cy = cyRaw + (useInset and math.floor(inset.Y) or 0)
-            VirtualInputManager:SendMouseMoveEvent(cx, cy, game)
+        local pos, sz = obj.AbsolutePosition, obj.AbsoluteSize
+        fx, fy = pos.X + sz.X * 0.5, pos.Y + sz.Y * 0.5
+        if applyInset then
+            local ignore = false
+            local p = obj
+            for _ = 1, 8 do
+                if not p then break end
+                if p:IsA("ScreenGui") then
+                    ignore = p.IgnoreGuiInset
+                    break
+                end
+                p = p.Parent
+            end
+            if not ignore then
+                local inset = GuiService:GetGuiInset()
+                fx = fx + inset.X
+                fy = fy + inset.Y
+            end
+        end
+    end)
+    return math.floor(fx + 0.5), math.floor(fy + 0.5)
+end
+
+local function pbTapMouse(x, y)
+    pcall(function()
+        if VirtualInputManager then
+            VirtualInputManager:SendMouseMoveEvent(x, y, game)
             task.wait(0.02)
-            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
-            task.wait(0.03)
-            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
-            clicked = true
-        end
-    end)
-    pcall(function()
-        if touchTap and attempt >= 2 then
-            touchTap(btn, true)
+            VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
             task.wait(0.05)
-            touchTap(btn, false)
-            clicked = true
+            VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
+        end
+    end)
+end
+
+-- Android REAL TOUCH tap — Delta-safe (no VirtualUser!), this is what makes card/image clicks register on mobile
+local function pbTapTouch(x, y)
+    pcall(function()
+        if VirtualInputManager then
+            VirtualInputManager:SendTouchInputEvent(1, Enum.UserInputState.Begin, x, y, 1, game)
+            task.wait(0.06)
+            VirtualInputManager:SendTouchInputEvent(1, Enum.UserInputState.End, x, y, 0, game)
         end
     end)
     pcall(function()
-        if firesignal and attempt >= 3 and btn:IsA("GuiButton") then
-            firesignal(btn.MouseButton1Click)
-            clicked = true
+        if VirtualInputManager then
+            VirtualInputManager:SendTouchInputEvent(1, Enum.UserInputState.Begin, x, y, 1, Vector2.new(0, 0), game)
+            task.wait(0.06)
+            VirtualInputManager:SendTouchInputEvent(1, Enum.UserInputState.End, x, y, 0, Vector2.new(0, 0), game)
         end
     end)
+end
+
+local function pbClickUpgradePick(node, attempt, onScreen)
+    if not node or not node.Parent then return false end
+    local clicked = false
+    local targets = pbBuildClickTargets(node)
+    -- 1) engine-level click/activate on every GuiButton in the chain (pick bar, card, image-buttons)
+    for _, obj in ipairs(targets) do
+        pcall(function()
+            if fireclick then
+                fireclick(obj)
+                clicked = true
+            end
+        end)
+        pcall(function()
+            if obj:IsA("GuiButton") then
+                obj:Activate()
+                clicked = true
+            end
+        end)
+        -- 2) touchTap on the FRAME itself too (works on non-button clickable frames)
+        pcall(function()
+            if touchTap and attempt >= 2 then
+                touchTap(obj, true)
+                task.wait(0.04)
+                touchTap(obj, false)
+                clicked = true
+            end
+        end)
+        -- 3) raw input signal sweep (each signal guarded separately; unknown signals just error out harmlessly)
+        if attempt >= 3 and firesignal then
+            pcall(function()
+                firesignal(obj.InputBegan, { UserInputType = Enum.UserInputType.Touch, UserInputState = Enum.UserInputState.Begin })
+                firesignal(obj.InputEnded, { UserInputType = Enum.UserInputType.Touch, UserInputState = Enum.UserInputState.End })
+                clicked = true
+            end)
+            pcall(function()
+                if obj:IsA("GuiButton") then
+                    firesignal(obj.MouseButton1Click)
+                    firesignal(obj.MouseButton1Down)
+                    firesignal(obj.MouseButton1Up)
+                    clicked = true
+                end
+            end)
+        end
+    end
+    -- 4) screen taps: pick bar center, biggest frame (card) center and icon center — attempt decides which + inset variant
+    local vpT = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+    local pickT = targets[1]
+    local cardT, imgT = nil, nil
+    local bestA = 0
+    for _, obj in ipairs(targets) do
+        local a = obj.AbsoluteSize.X * obj.AbsoluteSize.Y
+        -- widest-but-still-card-sized frame (never the full popup container: its center is a dead gap)
+        if obj.AbsoluteSize.X <= vpT.X * 0.45 and a > bestA then
+            bestA = a
+            cardT = obj
+        end
+        if (not imgT) and (obj:IsA("ImageLabel") or obj:IsA("ImageButton")) then imgT = obj end
+    end
+    if onScreen ~= false then
+        local applyInset = ((attempt % 2) == 1)
+        local tapSet = {}
+        if pickT and pickT.Parent then table.insert(tapSet, pickT) end
+        if attempt >= 2 and cardT and cardT ~= pickT then table.insert(tapSet, cardT) end
+        if attempt >= 3 and imgT then table.insert(tapSet, imgT) end
+        for _, o in ipairs(tapSet) do
+            local x, y = pbScreenPointFor(o, applyInset)
+            pbTapMouse(x, y)
+            pbTapTouch(x, y)
+        end
+    end
     return clicked
+end
+
+-- v5.9 CARD-ROW geometry detector: the popup itself (3 tall scroll cards), NOT just the pick bars.
+-- Criteria from the real screenshot: 2..4 similar tall cards in a row, centered, each 9..42% screen width,
+-- height >= 1.15x width and 26..95% screen height. Nested duplicates removed (keep outermost card).
+local function pbFindCardsByGeometry()
+    local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+    local row = {}
+    pcall(function()
+        for _, gui in ipairs(PlayerGui:GetChildren()) do
+            if gui ~= State.HubScreenGui and gui:IsA("ScreenGui") and gui.Enabled then
+                for _, d in ipairs(gui:GetDescendants()) do
+                    if d:IsA("GuiObject") and isGuiVisible(d)
+                        and (d:IsA("ImageButton") or d:IsA("TextButton") or d:IsA("ImageLabel") or d:IsA("TextLabel") or d:IsA("Frame")) then
+                        local pos, sz = d.AbsolutePosition, d.AbsoluteSize
+                        if sz.X >= vp.X * 0.09 and sz.X <= vp.X * 0.42 and sz.Y >= vp.Y * 0.26 and sz.Y <= vp.Y * 0.95
+                            and sz.Y >= sz.X * 1.15 and pos.X >= -10 and pos.Y >= vp.Y * 0.08 and pos.Y <= vp.Y * 0.88 then
+                            table.insert(row, { obj = d, x = pos.X, y = pos.Y, w = sz.X, h = sz.Y })
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    if #row < 2 then return nil end
+    table.sort(row, function(a, b) return (a.w * a.h) > (b.w * b.h) end)
+    -- remove inner duplicates: anything whose center sits inside a bigger kept rect
+    local kept = {}
+    for _, it in ipairs(row) do
+        local cx, cy = it.x + it.w * 0.5, it.y + it.h * 0.5
+        local inside = false
+        for _, k in ipairs(kept) do
+            if cx >= k.x and cx <= k.x + k.w and cy >= k.y and cy <= k.y + k.h then
+                inside = true
+                break
+            end
+        end
+        if not inside then table.insert(kept, it) end
+    end
+    table.sort(kept, function(a, b) return a.x < b.x end)
+    local groups = {}
+    for _, it in ipairs(kept) do
+        local placed = false
+        for _, g in ipairs(groups) do
+            if math.abs(g.y0 - it.y) <= 30 and math.abs(g.w - it.w) <= math.max(40, g.w * 0.35)
+                and math.abs(g.h - it.h) <= math.max(40, g.h * 0.35) then
+                table.insert(g.items, it)
+                placed = true
+                break
+            end
+        end
+        if not placed then
+            table.insert(groups, { y0 = it.y, w = it.w, h = it.h, items = { it } })
+        end
+    end
+    local bestG = nil
+    for _, g in ipairs(groups) do
+        local n = #g.items
+        if n >= 2 and n <= 4 then
+            local ok = true
+            local sumMid = 0
+            for i = 1, n do
+                sumMid = sumMid + g.items[i].x + g.items[i].w * 0.5
+                if i >= 2 then
+                    local gap = g.items[i].x - (g.items[i - 1].x + g.items[i - 1].w)
+                    if gap < -6 or gap > vp.X * 0.30 or (g.items[i].x - g.items[i - 1].x) < vp.X * 0.075 then
+                        ok = false
+                    end
+                end
+            end
+            local midAvg = sumMid / n
+            if ok and midAvg >= vp.X * 0.30 and midAvg <= vp.X * 0.70 then
+                if not bestG or #g.items > #bestG.items then bestG = g end
+            end
+        end
+    end
+    if not bestG then return nil end
+    local picks = {}
+    local accept = false
+    for _, it in ipairs(bestG.items) do
+        local txt = pbCollectCardText(it.obj)
+        local sc = pbScoreCardText(txt)
+        if sc > 0 then accept = true end
+        for _, kw in ipairs(PB_PICK_KWS) do
+            if pbHasKeyword(txt, kw) then
+                accept = true
+                break
+            end
+        end
+        table.insert(picks, { btn = it.obj, score = sc, x = it.x, onScreen = true })
+    end
+    -- no readable text at all? a centered 3-card row during the pause is still this popup (click left card)
+    if not accept and #picks ~= 3 then return nil end
+    return picks
 end
 
 task.spawn(function()
@@ -3811,9 +4038,10 @@ task.spawn(function()
             local cutscene = workspace:FindFirstChild("inCutscene")
             local isPaused = (cutscene and cutscene.Value == true)
 
-            local picks, anyPickLabel = pbFindPicksByLabel()
+            local picks = pbFindPicksByLabel()
             if not picks and (isPaused or (upgFrame and isGuiVisible(upgFrame))) then
-                picks = pbFindPicksByGeometry()
+                -- v5.9: whole-cards row first (click the card/image anywhere), then the pick-bar row as backup
+                picks = pbFindCardsByGeometry() or pbFindPicksByGeometry()
             end
 
             if picks then
@@ -3831,15 +4059,11 @@ task.spawn(function()
                     State.PB_DungeonStatusText = "⚠️ النافذة ما انقفلت — أكمل الفارم (المحاولة مستمرة بالخلفية)"
                     return
                 end
-                if now < cooldownUntil and (now - popupSince) > 12.0 then
-                    State.PB_UpgradePopupOpen = false
-                    return
-                end
 
                 pickAttempts = pickAttempts + 1
 
                 local bestI = 1
-                for i = 1, #picks do
+                for i = 2, #picks do
                     if picks[i].score > picks[bestI].score then
                         bestI = i
                     end
@@ -3847,17 +4071,16 @@ task.spawn(function()
                 if picks[bestI].score <= -1000 and picks[1].score > -1000 then
                     bestI = 1
                 end
+                -- after 8 attempts on the top card, cycle ALL cards (something may be scored onto a hidden frame)
+                if pickAttempts >= 8 then
+                    bestI = ((pickAttempts - 8) % #picks) + 1
+                end
 
                 local chosen = picks[bestI]
                 local chosenIndex = math.clamp(bestI, 1, 3)
 
                 State.PB_M1ClickInFlight = true
                 pbClickUpgradePick(chosen.btn, pickAttempts, chosen.onScreen ~= false)
-                -- After 6 failed attempts, also click the whole card frame (the popup accepts card clicks too)
-                if pickAttempts >= 6 then
-                    task.wait(0.03)
-                    pbClickUpgradePick(chosen.btn.Parent, pickAttempts, chosen.onScreen ~= false)
-                end
                 task.wait(0.05)
                 State.PB_M1ClickInFlight = false
 
@@ -3887,7 +4110,7 @@ task.spawn(function()
                     end
                 end
 
-                State.PB_DungeonStatusText = "⬆️ اختيار الترقية: محاولة " .. tostring(pickAttempts) .. " — بطاقة رقم " .. tostring(chosenIndex)
+                State.PB_DungeonStatusText = "⬆️ اختيار الترقية: محاولة " .. tostring(pickAttempts) .. " — بطاقة " .. tostring(chosenIndex) .. " (كارت+صورة)"
             else
                 State.PB_UpgradePopupOpen = false
                 State.PB_LastUpgradeScanTick = now
@@ -5098,8 +5321,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v5.8 | Pixel Blade [Auto PICK Clicker + Hit-Lock + FPS Boost]"
-    or "⚔️ Delta Hub v5.8 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v5.9 | Pixel Blade [Auto-Pick WHOLE CARD + Touch Tap + FPS Boost]"
+    or "⚔️ Delta Hub v5.9 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5468,7 +5691,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.8 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v5.9 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6105,4 +6328,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v5.8] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v5.9] Loaded! Active Game Detected: " .. tostring(CurrentGame))
