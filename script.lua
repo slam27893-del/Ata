@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v6.8 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v6.9 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.8)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.9)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -2497,32 +2497,41 @@ local function pbPerformRealM1Attack()
             task.spawn(function()
                 pcall(function()
                     local vp = pbGetVP()
-                    local inset = GuiService:GetGuiInset()
                     local swordBtn, jumpBtn = pbFindSwordAndJumpButtons()
 
-                    -- v6.7: tap the game's OWN mobile Jump button (top of the swing) for a guaranteed physical jump
-                    if jumpBtn and jumpBtn.Parent and isGuiVisible(jumpBtn) then
-                        local jp = jumpBtn.AbsolutePosition
-                        local js = jumpBtn.AbsoluteSize
-                        local jx = math.floor(jp.X + js.X * 0.5)
-                        local jy = math.floor(jp.Y + js.Y * 0.5 + inset.Y)
+                    -- v6.9: ground check + INSET-AWARE screen points. Pixel Blade's mobile HUD ScreenGui ignores
+                    -- the GuiInset, so the old hardcoded "+ inset.Y" pushed EVERY sword tap ~30px below the button
+                    -- = swings landing on nothing ("يحاول مواصلة الهجوم"). pbScreenPointFor adds the offset ONLY
+                    -- when the hosting ScreenGui actually needs it.
+                    local grounded = false
+                    pcall(function()
+                        if Humanoid then
+                            local hs = Humanoid:GetState()
+                            local nm = hs and hs.Name
+                            grounded = (nm ~= "Freefall" and nm ~= "Jumping" and nm ~= "Falling" and nm ~= "Dead" and nm ~= "Ragdoll")
+                        end
+                    end)
+
+                    -- tap the game's OWN mobile Jump button only when ChangeState didn't already launch the jump
+                    -- (double-jamming jump while airborne near ledges is what wedged the player on raid walls)
+                    if jumpBtn and jumpBtn.Parent and isGuiVisible(jumpBtn) and grounded then
+                        local jx, jy = pbScreenPointFor(jumpBtn, true)
                         VirtualInputManager:SendMouseButtonEvent(jx, jy, 0, true, game, 1)
                         task.wait(0.01)
                         VirtualInputManager:SendMouseButtonEvent(jx, jy, 0, false, game, 1)
                     end
 
-                    local sx, syScreen, syInset
+                    local sx, syScreen, syTap
                     if swordBtn and swordBtn.Parent then
                         local pos = swordBtn.AbsolutePosition
                         local sz = swordBtn.AbsoluteSize
-                        sx = math.floor(pos.X + sz.X * 0.5)
+                        sx, syTap = pbScreenPointFor(swordBtn, true)
                         syScreen = math.floor(pos.Y + sz.Y * 0.5)
-                        syInset = math.floor(syScreen + inset.Y)
                     else
                         -- Exact measured Sword Button (🗡️) center from Android screenshot (0.7855, 0.6962)
                         sx = math.floor(vp.X * 0.7855)
                         syScreen = math.floor(vp.Y * 0.6962)
-                        syInset = math.floor(syScreen + inset.Y)
+                        syTap = syScreen
                     end
 
                     -- Ensure Hub MainFrame is not covering the Sword Button
@@ -2537,9 +2546,9 @@ local function pbPerformRealM1Attack()
                     end
 
                     if not coveredByHub then
-                        VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, true, game, 1)
+                        VirtualInputManager:SendMouseButtonEvent(sx, syTap, 0, true, game, 1)
                         task.wait(0.02)
-                        VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, false, game, 1)
+                        VirtualInputManager:SendMouseButtonEvent(sx, syTap, 0, false, game, 1)
                     end
                     -- v6.7: release jump flag after the swing press so the NEXT swing re-jumps (never held true)
                     if Humanoid then
@@ -4145,6 +4154,26 @@ task.spawn(function()
 
                 if picks then
                     sawPickEpisode = true
+                    -- v6.9 ANIM GUARD (the DEFINITIVE priority fix — user screenshot proved it): the three cards
+                    -- SLIDE IN over ~1-2s. The old code clicked the instant they appeared: all card text was empty
+                    -- mid-animation -> scores 0/0/0 -> LEFTMOST picked -> THORNS, while the SPIRIT card was still
+                    -- animating! Now: never click before the popup is 1.8s old, and keep waiting until EVERY card
+                    -- actually has readable text; give up waiting at 3.6s (best-effort left-of-readable) so a truly
+                    -- textless popup still closes.
+                    local allReadable = true
+                    for pi = 1, #picks do
+                        if picks[pi].score == 0 then
+                            allReadable = false
+                            break
+                        end
+                    end
+                    local waitedOpen = now - popupSince
+                    if waitedOpen < 1.8 or (not allReadable and waitedOpen < 3.6) then
+                        if not inCooldown then
+                            State.PB_DungeonStatusText = "⬆️ أنتظر اكتمال الكروت... " .. string.format("%.1f", waitedOpen) .. "ث"
+                        end
+                        return
+                    end
                     pickAttempts = pickAttempts + 1
 
                     local bestI = 1
@@ -5427,8 +5456,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v6.8 | Pixel Blade [Ally-Safe Raids + Priority Readout + Jump-Every-Swing]"
-    or "⚔️ Delta Hub v6.8 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v6.9 | Pixel Blade [Settled-Cards Priority Pick + Inset-Fixed Sword Tap]"
+    or "⚔️ Delta Hub v6.9 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5797,7 +5826,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.8 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.9 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6422,4 +6451,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v6.8] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v6.9] Loaded! Active Game Detected: " .. tostring(CurrentGame))
