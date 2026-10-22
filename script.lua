@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v6.6 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v6.7 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.6)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v6.7)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -675,6 +675,16 @@ local function isGuiVisible(obj)
         current = current.Parent
     end
     return true
+end
+
+-- v6.0/v6.7: REAL viewport (the never-defined `Camera` global made fallback coords wrong on phones ->
+-- sword-button taps missed the button = "the player wastes attacks"). Defined early so combat uses it too.
+local function pbGetVP()
+    local ok, vp = pcall(function()
+        return workspace.CurrentCamera.ViewportSize
+    end)
+    if ok and vp and vp.X > 100 then return vp end
+    return Vector2.new(1280, 720)
 end
 
 local function smartClickButton(btn, offsetX, offsetY)
@@ -2386,7 +2396,7 @@ local function pbFindSwordAndJumpButtons()
 
     local swordBtn = nil
     local jumpBtn = nil
-    local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+    local vp = pbGetVP()
 
     pcall(function()
         local gameUI = PlayerGui:FindFirstChild("gameUI")
@@ -2442,17 +2452,28 @@ local function pbPerformRealM1Attack()
     if not Config.PB_AutoClicker then return end
     local now = tick()
     -- v6.5 watchdog: PB_M1ClickInFlight used to be able to stay true forever if the release thread died
-    -- (that was the "auto-clicker hangs after the pick" report) -> stale flag now expires after 1.5s.
-    if State.PB_M1ClickInFlight and (now - (State.PB_M1InFlightSince or 0)) >= 1.5 then
+    -- (that was the "auto-clicker hangs after the pick" report) -> stale flag expires after just 0.35s (v6.7:
+    -- 1.5s was itself wasting ~12 attacks per dropped release).
+    if State.PB_M1ClickInFlight and (now - (State.PB_M1InFlightSince or 0)) >= 0.35 then
         State.PB_M1ClickInFlight = false
     end
     if (now - (State.PB_LastM1Time or 0)) < 0.12 or State.PB_M1ClickInFlight then return end
     State.PB_LastM1Time = now
 
     pcall(function()
-        -- 1. Trigger Real Physical Jump for "Overhead" Sword Upgrade!
+        -- v6.7 JUMP EVERY SWING (max overhead damage): a held Jump=true only jumps ONCE (and games that
+        -- disable jumping null it out every frame). Toggle false->true + ChangeState fires a real jump per
+        -- attack, and re-arms on landing. Jump is released in the swing-release thread below.
         if Humanoid then
-            Humanoid.Jump = true
+            local st = Humanoid:GetState()
+            local airborne = st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping
+            if not airborne then
+                Humanoid.Jump = false
+                Humanoid.Jump = true
+                pcall(function() Humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end)
+            else
+                Humanoid.Jump = false
+            end
         end
 
         -- 2. Pure Screen Auto-Clicker via VirtualInputManager ONLY (Press -> 0.02s -> Release, strictly 1-at-a-time!)
@@ -2461,9 +2482,20 @@ local function pbPerformRealM1Attack()
             State.PB_M1InFlightSince = tick()
             task.spawn(function()
                 pcall(function()
-                    local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+                    local vp = pbGetVP()
                     local inset = GuiService:GetGuiInset()
-                    local swordBtn = pbFindSwordAndJumpButtons()
+                    local swordBtn, jumpBtn = pbFindSwordAndJumpButtons()
+
+                    -- v6.7: tap the game's OWN mobile Jump button (top of the swing) for a guaranteed physical jump
+                    if jumpBtn and jumpBtn.Parent and isGuiVisible(jumpBtn) then
+                        local jp = jumpBtn.AbsolutePosition
+                        local js = jumpBtn.AbsoluteSize
+                        local jx = math.floor(jp.X + js.X * 0.5)
+                        local jy = math.floor(jp.Y + js.Y * 0.5 + inset.Y)
+                        VirtualInputManager:SendMouseButtonEvent(jx, jy, 0, true, game, 1)
+                        task.wait(0.01)
+                        VirtualInputManager:SendMouseButtonEvent(jx, jy, 0, false, game, 1)
+                    end
 
                     local sx, syScreen, syInset
                     if swordBtn and swordBtn.Parent then
@@ -2494,6 +2526,10 @@ local function pbPerformRealM1Attack()
                         VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, true, game, 1)
                         task.wait(0.02)
                         VirtualInputManager:SendMouseButtonEvent(sx, syInset, 0, false, game, 1)
+                    end
+                    -- v6.7: release jump flag after the swing press so the NEXT swing re-jumps (never held true)
+                    if Humanoid then
+                        Humanoid.Jump = false
                     end
                     VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
                     VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
@@ -3617,14 +3653,7 @@ local function pbCollectCardText(node)
     return cardText
 end
 
--- v6.0: viewport helper (the OLD `Camera` global never existed -> crash -> empty results)
-local function pbGetVP()
-    local ok, vp = pcall(function()
-        return workspace.CurrentCamera.ViewportSize
-    end)
-    if ok and vp and vp.X > 100 then return vp end
-    return Vector2.new(1280, 720)
-end
+-- v6.7: pbGetVP now defined right after isGuiVisible (used by combat engine too)
 
 -- v6.5: climb from a pick node up to ITS card root: stop at frames wider than 60% of the screen OR at any
 -- parent holding 2+ similarly-sized siblings (that parent is the shared row container, not the card).
@@ -4512,46 +4541,57 @@ local function pbCheckAndReplayDungeon(pbRemotes)
         and tostring(dfObj.Value)
         or (Config.PB_LastDungeonDiff or Config.PB_SelectedDifficulty or "Normal")
 
-    -- 1. v6.6: full PlayerGui walk (gameUI Folder INCLUDED — the old ScreenGui-children loop NEVER saw the
-    -- WORLD CLEARED/PLAYER VOTES screen, that is why replay "ما تشتغل"). Match REPLAY / PLAY AGAIN / RETRY /
-    -- REJOIN buttons (never LEAVE/EXIT/QUIT). "world cleared / player votes / victory" TEXT alone = hard evidence
-    -- the vote screen is up: the server IGNORES playerTP while voting is pending, only the real button counts.
+    -- 1. v6.7: SINGLE-PASS walk (one GuiText read per node; the v6.6 per-button descendant scan every 0.9s was
+    -- stealing frames = "يضيع الضربات"). End-screen buttons are found via their OWN text ("REPLAY"), so even
+    -- pixel-art frames with readable labels resolve; LEAVE/EXIT/QUIT can never match. No text at all anywhere?
+    -- "world cleared / player votes" still arms the 1.1s click loop (button resolution happens next passes).
     local foundEndScreenBtn = nil
     local endScreenEvidence = false
-    local replayBtns = {}
+    local replayNodes = {}
     pbEachUiObject(function(d)
-        if d:IsA("GuiText") then
-            local txt = pbNormTxt(d.Text) .. " " .. pbNormTxt(d.Name)
-            if string.find(txt, "world cleared", 1, true) or string.find(txt, "player votes", 1, true)
-                or string.find(txt, "dungeon cleared", 1, true) or string.find(txt, "victory", 1, true) then
-                endScreenEvidence = true
-            end
-        end
-        if d:IsA("GuiButton") then
-            local sz, pos = d.AbsoluteSize, d.AbsolutePosition
-            if sz.X >= 40 and sz.Y >= 20 and pos.X >= -10 and pos.Y >= -10 then
-                local txt = pbNormTxt(d.Name) .. " " .. (d:IsA("GuiText") and pbNormTxt(d.Text) or "")
-                for _, sub in ipairs(d:GetDescendants()) do
-                    if sub:IsA("GuiText") and sub.Text then
-                        txt = txt .. " " .. pbNormTxt(sub.Text)
-                    end
+        if d.IsA and d:IsA("GuiText") then
+            local txt = pbNormTxt(d.Text)
+            local nameLow = pbNormTxt(d.Name)
+            if not endScreenEvidence then
+                if string.find(txt, "world cleared", 1, true) or string.find(txt, "player votes", 1, true)
+                    or string.find(txt, "dungeon cleared", 1, true) or string.find(txt, "victory", 1, true) then
+                    endScreenEvidence = true
                 end
-                txt = txt .. " " .. (d.Parent and pbNormTxt(d.Parent.Name) or "")
+            end
+            if d.AbsoluteSize.X >= 24 and d.AbsoluteSize.Y >= 10 then
                 local isReplay = pbHasKeyword(txt, "replay") or pbHasKeyword(txt, "rejoin") or pbHasKeyword(txt, "retry")
                     or string.find(txt, "play again", 1, true)
+                    or pbHasKeyword(nameLow, "replay") or pbHasKeyword(nameLow, "retry")
                 local isLeave = pbHasKeyword(txt, "leave") or pbHasKeyword(txt, "exit") or pbHasKeyword(txt, "quit")
+                    or pbHasKeyword(nameLow, "leave")
                 if isReplay and not isLeave then
-                    table.insert(replayBtns, d)
+                    table.insert(replayNodes, d)
                 end
             end
         end
     end)
-    if #replayBtns > 0 then
-        table.sort(replayBtns, function(a, b)
-            return a.AbsoluteSize.X * a.AbsoluteSize.Y < b.AbsoluteSize.X * b.AbsoluteSize.Y
+    for _, n in ipairs(replayNodes) do
+        pcall(function()
+            local target = nil
+            if n:IsA("GuiButton") then
+                target = n
+            else
+                local p = n.Parent
+                for _ = 1, 3 do
+                    if p and p:IsA("GuiButton") then
+                        target = p
+                        break
+                    end
+                    p = p and p.Parent
+                end
+                if not target and n.Parent and n.Parent:IsA("GuiObject") then
+                    target = n.Parent
+                end
+            end
+            if target then
+                foundEndScreenBtn = foundEndScreenBtn or target
+            end
         end)
-        foundEndScreenBtn = replayBtns[1]
-        endScreenEvidence = true
     end
 
     -- 2. v5.3: Count alive enemies OURSELVES (previous version reused State.PB_ZeroEnemySinceTick which only exists
@@ -5354,8 +5394,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v6.6 | Pixel Blade [Auto-Replay REPLAY-Button Clicker + Priority Diag]"
-    or "⚔️ Delta Hub v6.6 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v6.7 | Pixel Blade [Jump-Every-Swing + No Wasted Hits + Fast Replay]"
+    or "⚔️ Delta Hub v6.7 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5724,7 +5764,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.6 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v6.7 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6349,4 +6389,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v6.6] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v6.7] Loaded! Active Game Detected: " .. tostring(CurrentGame))
