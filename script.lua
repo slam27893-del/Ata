@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v7.8 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v7.9 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.8)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.9)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -2867,30 +2867,44 @@ end
 --    Gathers all OTHER active enemies in the current open room (hadEntrance == true, within <= 85 studs, non-Boss)
 --    directly onto the primary target's CFrame (6.0 studs in front of the player, with their backs turned to the player)
 --    so the player's Auto-Clicker sword swings + Overhead jumps + pbDamageModel cleave and kill ALL enemies in one spot!
--- v7.7 HITBOX-EXPANDER HARDENED (user asked: «هل يعمل حقًا أم مزحة؟» — honest answer: the old code matched
--- ONLY the exact part name "basehitbox" on every mob; if the game's update renamed or re-parented those
--- hitboxes, the expander silently did NOTHING at all). Now it matches ANY part whose name CONTAINS
--- "hitbox"/"hurtbox" (direct children first, then a recursive sweep), expands up to 6 parts per mob, falls
--- back to the humanoid root when no named hitbox exists, remembers every ORIGINAL size, and Loop 2E restores
--- them when the toggle is switched off so the game never stays warped.
+-- v7.9 PHYSICS-SAFE EXPANSION — ROOT CAUSE of "mobs & bosses fall out of the map and vanish" (user report):
+-- v7.7 resized EVERY part whose name contained "hitbox" and ALSO wrote CanCollide=false + Massless=true on it.
+-- Bosses (and some elites) name their REAL collision body exactly that ("Hitbox"), so they lost ground
+-- collision and sank through the floor; the HumanoidRootPart/Torso fallback did the same to every mob without
+-- a named hitbox. The expander now NEVER writes physics — zero CanCollide, zero Massless, zero Anchored — and
+-- only ever resizes parts that were ALREADY non-collidable hit volumes. Physics roots are blacklisted, the
+-- root fallback is deleted, max 4 boxes per mob, and models already below the map are skipped entirely.
 local function pbExpandHitboxesFor(model, sz)
     if not State.PB_HitboxOriginal then
         State.PB_HitboxOriginal = setmetatable({}, { __mode = "k" })
     end
+    if not State.PB_HitboxSkipUntil then
+        State.PB_HitboxSkipUntil = setmetatable({}, { __mode = "k" })
+    end
     local origMap = State.PB_HitboxOriginal
+    local skipMap = State.PB_HitboxSkipUntil
+    if (skipMap[model] or 0) > tick() then return false end
     local applied = 0
+    local function isPhysicsRoot(p)
+        if model.PrimaryPart == p then return true end
+        local pn = string.lower(p.Name)
+        return pn == "humanoidrootpart" or pn == "torso" or pn == "uppertorso"
+            or pn == "lowertorso" or pn == "head" or pn == "rootpart"
+    end
     local function tryPart(p)
-        if applied < 6 and p:IsA("BasePart") then
+        if applied < 4 and p:IsA("BasePart") and not isPhysicsRoot(p) then
             local pn = string.lower(p.Name)
-            if string.find(pn, "hitbox", 1, true) or string.find(pn, "hurtbox", 1, true) then
+            if (string.find(pn, "hitbox", 1, true) or string.find(pn, "hurtbox", 1, true))
+                and p.CanCollide == false then
                 if origMap[p] == nil then
-                    origMap[p] = p.Size
+                    origMap[p] = { Size = p.Size, Massless = p.Massless }
                 end
                 if p.Size.X < sz.X or p.Size.Y < sz.Y or p.Size.Z < sz.Z then
                     p.Size = sz
+                    -- a 45-stud block welded into a mob weighs thousands of times more than the original; making
+                    -- it massless keeps the Humanoid's footing exactly as it was (no sinking, no crushed jumps)
+                    p.Massless = true
                 end
-                p.CanCollide = false
-                p.Massless = true
                 applied = applied + 1
             end
         end
@@ -2901,21 +2915,8 @@ local function pbExpandHitboxesFor(model, sz)
         end
         if applied == 0 then
             for _, p in ipairs(model:GetDescendants()) do
-                if applied >= 6 then break end
+                if applied >= 4 then break end
                 tryPart(p)
-            end
-        end
-        if applied == 0 then
-            local root = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso") or model.PrimaryPart
-            if root and root:IsA("BasePart") then
-                if origMap[root] == nil then
-                    origMap[root] = root.Size
-                end
-                if root.Size.X < sz.X or root.Size.Y < sz.Y then
-                    root.Size = sz
-                end
-                root.CanCollide = false
-                applied = 1
             end
         end
     end)
@@ -2935,7 +2936,8 @@ local function pbBringAndExpandTargets()
             for pR, sR in pairs(origR) do
                 pcall(function()
                     if pR and pR.Parent then
-                        pR.Size = sR
+                        pR.Size = sR.Size
+                        pR.Massless = sR.Massless
                     end
                 end)
             end
@@ -2956,22 +2958,33 @@ local function pbBringAndExpandTargets()
     end
     local gatherPos = gatherCF.Position
 
+    -- v7.9: only teleport mobs onto a real floor. Bring-mobs used to shove enemies onto the gather point even
+    -- when it hung in mid-air at a ledge/edge of the arena — they dropped straight out of the world and vanished.
+    local gatherGrounded = false
+    pcall(function()
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        if HumanoidRootPart and HumanoidRootPart.Parent then
+            rp.FilterDescendantsInstances = { HumanoidRootPart.Parent }
+        end
+        gatherGrounded = workspace:Raycast(gatherPos + Vector3.new(0, 8, 0), Vector3.new(0, -60, 0), rp) ~= nil
+    end)
+
     local allModels = collectAllPBModels()
     for _, v in ipairs(allModels) do
         if v and v.Parent and isPBTrueEnemy(v, true, true) then
             pcall(function()
-                local bh = v:FindFirstChild("basehitbox") or v:FindFirstChild("basehitbox", true)
-                if Config.PB_ExpandHitbox or isAutoFarming or Config.PB_KillAura or Config.PB_BringMobs then
+                local eHrp = v:FindFirstChild("HumanoidRootPart")
+                local ePos = eHrp and eHrp:IsA("BasePart") and eHrp.Position or nil
+                -- v7.9: never touch a model that is already sinking / out of bounds (it is gone server-side)
+                local isFalling = ePos ~= nil and ePos.Y < (HumanoidRootPart.Position.Y - 120)
+                if not isFalling and (Config.PB_ExpandHitbox or isAutoFarming or Config.PB_KillAura or Config.PB_BringMobs) then
                     pbExpandHitboxesFor(v, sz)
                 end
-                local eHrp = v:FindFirstChild("HumanoidRootPart")
                 if eHrp and eHrp:IsA("BasePart") then
                     -- Never anchor eHrp on client (client-side Anchored freezes NPC at spawn and desyncs server hits!)
                     if eHrp.Anchored then
                         eHrp.Anchored = false
-                    end
-                    if Config.PB_ExpandHitbox or isAutoFarming or Config.PB_KillAura or Config.PB_BringMobs then
-                        eHrp.CanCollide = false
                     end
 
                     if Config.PB_BringMobs then
@@ -2979,27 +2992,21 @@ local function pbBringAndExpandTargets()
                         local isBoss = PB_BOSS_NAMES[v.Name] == true or v.Name == "Maneater" or v.Name == "BookHand" or (v:FindFirstChild("worm") ~= nil)
                         if isAutoFarming then
                             -- During Dungeon/Raid Auto-Farm: pull all OTHER active room enemies (hadEntrance == true) onto the primary target spot!
-                            if v ~= activeFollowMob and not isBoss and (isRaid or hadEnt == true) then
+                            if gatherGrounded and v ~= activeFollowMob and not isBoss and (isRaid or hadEnt == true) then
                                 local distToGather = (eHrp.Position - gatherPos).Magnitude
                                 if distToGather > 1.5 and distToGather <= 85 then
                                     eHrp.AssemblyLinearVelocity = Vector3.zero
                                     eHrp.AssemblyAngularVelocity = Vector3.zero
                                     eHrp.CFrame = gatherCF
-                                    if bh and bh:IsA("BasePart") and bh ~= eHrp then
-                                        bh.CFrame = gatherCF
-                                    end
                                 end
                             end
                         else
                             -- Manual mode with Bring Mobs ON: pull active enemies within 65 studs in front of player's sword
-                            if not isBoss and (isRaid or hadEnt == true or (eHrp.Position - HumanoidRootPart.Position).Magnitude <= 50) then
+                            if gatherGrounded and not isBoss and (isRaid or hadEnt == true or (eHrp.Position - HumanoidRootPart.Position).Magnitude <= 50) then
                                 if (eHrp.Position - HumanoidRootPart.Position).Magnitude <= 65 then
                                     eHrp.AssemblyLinearVelocity = Vector3.zero
                                     eHrp.AssemblyAngularVelocity = Vector3.zero
                                     eHrp.CFrame = gatherCF
-                                    if bh and bh:IsA("BasePart") and bh ~= eHrp then
-                                        bh.CFrame = gatherCF
-                                    end
                                 end
                             end
                         end
@@ -4554,6 +4561,26 @@ task.spawn(function()
         if Config.PB_ExpandHitbox or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_BringMobs or State.PB_HitboxRestorePending then
             pcall(pbBringAndExpandTargets)
         end
+        -- v7.9 anti-vanish watchdog: any mob/boss caught sinking below the world gets its original sizes back
+        -- immediately and is left alone for 20s, so the hub can never be the reason a model keeps dropping.
+        pcall(function()
+            local origMap = State.PB_HitboxOriginal
+            if not origMap or not HumanoidRootPart then return end
+            for pR, sR in pairs(origMap) do
+                local mdl = pR and pR.Parent
+                if mdl and not mdl:IsA("BasePart") then
+                    local r0 = mdl:FindFirstChild("HumanoidRootPart")
+                    if r0 and r0:IsA("BasePart") and r0.Position.Y < (HumanoidRootPart.Position.Y - 120) then
+                        pcall(function()
+                            pR.Size = sR.Size
+                            pR.Massless = sR.Massless
+                        end)
+                        origMap[pR] = nil
+                        State.PB_HitboxSkipUntil[mdl] = tick() + 20
+                    end
+                end
+            end
+        end)
     end
 end)
 
@@ -5852,8 +5879,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v7.8 | Pixel Blade [Auto-Aim Swings — every click connects]"
-    or "⚔️ Delta Hub v7.8 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v7.9 | Pixel Blade [No More Falling Mobs/Bosses — Physics-Safe Hitbox]"
+    or "⚔️ Delta Hub v7.9 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -6222,7 +6249,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.8 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.9 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6848,4 +6875,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v7.8] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v7.9] Loaded! Active Game Detected: " .. tostring(CurrentGame))
