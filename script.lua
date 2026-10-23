@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v7.4 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v7.5 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.4)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.5)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -1712,6 +1712,34 @@ local function isPBTrueEnemy(mob, isRaid, allowNearbyNoAttribute)
     end
     if allyMark then return false end
     if isPBChestModel(mob) or isPBBreakableModel(mob) or isPBIgnoredModel(mob) then return false end
+    -- v7.5 DUNGEON-TRAP GUARD (user: "في دنجن W4 اللاعب يحاول يقتل الفخاخ ويعلق فيها"): saw/spike/flame hazard
+    -- devices are treated as mobs by the room-activation flag, so combat swung at a spinning gear until the farm
+    -- wedged. ANY model whose name smells like a hazard device is never an enemy (cached per instance — cost of
+    -- a substring scan happens once per model for the whole run).
+    local trapCache = State.PB_TrapCache
+    if not trapCache then
+        trapCache = setmetatable({}, { __mode = "k" })
+        State.PB_TrapCache = trapCache
+    end
+    local trapMark = trapCache[mob]
+    if trapMark == nil then
+        trapMark = false
+        local words = State.PB_TrapWords
+        if not words then
+            words = { "trap", "saw", "buzzsaw", "spike", "spinner", "spinning", "gear", "flamejet", "burner",
+                "furnace", "turret", "pendulum", "boulder", "crusher", "blender", "hazard", "obstacle", "disc" }
+            State.PB_TrapWords = words
+        end
+        local nameL = string.lower(tostring(mob.Name))
+        for w = 1, #words do
+            if string.find(nameL, words[w], 1, true) then
+                trapMark = true
+                break
+            end
+        end
+        trapCache[mob] = trapMark
+    end
+    if trapMark then return false end
     if not isPBMobAlive(mob) then return false end
 
     if mob.Name == "BookHand" then
@@ -2037,7 +2065,7 @@ local function findBestPBTarget(isRaid)
                 -- (State.PB_AttackFocus, refreshed every farm-loop iteration) may be judged — mobs merely visible
                 -- through a wall are NEVER touched (v7.0 blacklisted idle next-room mobs and killed farming).
                 -- 10s of EXACTLY zero HP delta while being attacked at melee range = NOT damageable (raid ally
-                -- bots, decorations) -> skip 20s (60s on repeat strike). Real mobs always bleed; named bosses
+                -- bots, traps, decorations) -> skip 20s (60s repeat, 600s if the thing is immobile). Real mobs always bleed; named bosses
                 -- excluded (legit invulnerable pillar phases).
                 if State.PB_AttackFocus == v and distFromMe <= 45 and watchHum
                     and watchHum.Health > 0 and PB_BOSS_NAMES[v.Name] ~= true
@@ -2052,12 +2080,24 @@ local function findBestPBTarget(isRaid)
                     if stw and stw.hp == watchHum.Health then
                         if now - stw.since >= 10.0 then
                             local strikes = (State.PB_MobStaleStrikes[v] or 0) + 1
+                            -- v7.5 STILLNESS RULE: 10s of zero damage AND the model moved < 3 studs while we
+                            -- hammered it = a hazard DEVICE (trap), not a living mob — jump straight to the
+                            -- run-length ban so the farm never re-engages it this dungeon again.
+                            local stPart = part
+                            if stw.pos and stPart then
+                                local dx = stPart.Position.X - stw.pos.X
+                                local dy = stPart.Position.Y - stw.pos.Y
+                                local dz = stPart.Position.Z - stw.pos.Z
+                                if dx * dx + dy * dy + dz * dz < 9 then
+                                    strikes = 3
+                                end
+                            end
                             State.PB_MobStaleStrikes[v] = strikes
-                            invulnMap[v] = now + (strikes >= 2 and 60 or 20)
+                            invulnMap[v] = now + (strikes >= 3 and 600 or (strikes >= 2 and 60 or 20))
                             State.PB_MobStale[v] = nil
                         end
                     else
-                        State.PB_MobStale[v] = { hp = watchHum.Health, since = now }
+                        State.PB_MobStale[v] = { hp = watchHum.Health, since = now, pos = part and part.Position or nil }
                     end
                 end
 
@@ -5591,8 +5631,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v7.4 | Pixel Blade [Morvik Flight-Phase Dodge]"
-    or "⚔️ Delta Hub v7.4 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v7.5 | Pixel Blade [W4 Trap Immunity + Flight Dodge]"
+    or "⚔️ Delta Hub v7.5 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5961,7 +6001,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.4 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.5 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6584,4 +6624,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v7.4] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v7.5] Loaded! Active Game Detected: " .. tostring(CurrentGame))
