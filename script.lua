@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v7.7 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v7.8 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.7)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.8)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -4833,6 +4833,26 @@ task.spawn(function()
     end
 end)
 
+-- v7.8 AUTO-AIM THE SWINGS (user: hitbox expander "ما فرق" AND the aura is dead on their server): Pixel Blade's
+-- current builds validate hits SERVER-side on a real swing window in front of the CAMERA — so local hitbox
+-- resizing can never matter there and bare remote fires are discarded. The only thing that counts is the real
+-- Auto-Clicker swing, and swings miss whenever the camera drifts off the mob. This aims the camera at the
+-- farm's CURRENT attack target right before every swing tap: horizontal-only (no pitch, no teleports, never
+-- touches the character's physics), 0.09s throttle so a player dragging the view still wins between taps.
+local function pbFaceTowardPart(tp)
+    if not tp or not tp:IsA("BasePart") then return end
+    pcall(function()
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local cPos = cam.CFrame.Position
+        local tPos = tp.Position
+        local dirX = tPos.X - cPos.X
+        local dirZ = tPos.Z - cPos.Z
+        if dirX * dirX + dirZ * dirZ < 1 then return end
+        cam.CFrame = CFrame.new(cPos, cPos + Vector3.new(dirX, 0, dirZ))
+    end)
+end
+
 -- 2G. Dedicated Independent Auto-Clicker Loop (Runs 100% independently whether Dungeon Auto-Farm is ON or OFF!)
 task.spawn(function()
     while State.Running do
@@ -4841,6 +4861,14 @@ task.spawn(function()
             if Config.PB_AutoClicker and HumanoidRootPart and not State.PB_UpgradePopupOpen then
                 local cutscene = workspace:FindFirstChild("inCutscene")
                 if not (cutscene and cutscene.Value == true) then
+                    -- v7.8: lock the camera onto the mob combat is currently fighting (fresh focus <= 1.2s)
+                    if (Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid)
+                        and State.PB_AttackFocus and State.PB_AttackFocus.Parent
+                        and (tick() - (State.PB_AttackFocusTick or 0)) < 1.2
+                        and (tick() - (State.PB_LastAimTick or 0)) >= 0.09 then
+                        State.PB_LastAimTick = tick()
+                        pbFaceTowardPart(getPBMobTargetPart(State.PB_AttackFocus))
+                    end
                     pbPerformRealM1Attack()
                 end
             end
@@ -5824,8 +5852,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v7.7 | Pixel Blade [Real Hitbox Expander (Multi-Name + Restore)]"
-    or "⚔️ Delta Hub v7.7 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v7.8 | Pixel Blade [Auto-Aim Swings — every click connects]"
+    or "⚔️ Delta Hub v7.8 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -6194,7 +6222,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.7 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.8 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6820,4 +6848,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v7.7] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v7.8] Loaded! Active Game Detected: " .. tostring(CurrentGame))
