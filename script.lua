@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v7.5 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v7.6 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.5)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.6)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -3297,6 +3297,7 @@ local function pbDetectFishingMinigameState(hubScreenGui)
     local mobileFishBtn = nil
     local fishingGuiActive = false
     local baseline = State.PB_BaselineGuiSet or {}
+    local ignoreGui = hubScreenGui or State.HubScreenGui
 
     local function checkSingleColor(col, inFishingContext)
         if not col then return end
@@ -3324,97 +3325,111 @@ local function pbDetectFishingMinigameState(hubScreenGui)
         end
     end
 
-    local ignoreGui = hubScreenGui or State.HubScreenGui
-    for _, gui in ipairs(PlayerGui:GetChildren()) do
-        if gui ~= ignoreGui and gui ~= StealthESPFolder and gui:IsA("LayerCollector") and gui.Enabled then
-            for _, obj in ipairs(gui:GetDescendants()) do
-                if obj:IsA("GuiObject") and isGuiVisible(obj) then
-                    local objNameLow = string.lower(obj.Name)
-                    local parentNameLow = obj.Parent and string.lower(obj.Parent.Name) or ""
-                    local inFishingContext = hasFishingKeyword(objNameLow)
-                        or hasFishingKeyword(parentNameLow)
-                        or not baseline[obj]
+    -- v7.6 PER-OBJECT INSPECTOR + 0.5s CACHE: the old engine walked ALL of PlayerGui every 15ms (mobile lag +
+    -- slow reactions). Now the full walk runs at most every 0.5s and REBUILDS a tiny cache of the fishing-context
+    -- widgets; between rebuilds the detector touches ONLY those objects, letting the main loop poll at 10ms for
+    -- near-instant green/blue reaction at a fraction of the CPU cost. Bar auto-alignment keeps running on the
+    -- cached cursor object = perfect aim EVERY frame of the minigame.
+    local function checkObj(obj, inFishingContext, allowPopupDetect)
+        local objNameLow = string.lower(obj.Name)
+        if hasFishingKeyword(objNameLow) or (obj.Parent and hasFishingKeyword(obj.Parent.Name)) then
+            fishingGuiActive = true
+        end
+        if obj.BackgroundTransparency < 0.95 then
+            checkSingleColor(obj.BackgroundColor3, inFishingContext)
+        end
+        if (obj:IsA("ImageLabel") or obj:IsA("ImageButton")) and obj.ImageTransparency < 0.95 then
+            checkSingleColor(obj.ImageColor3, inFishingContext)
+        end
+        local stroke = obj:FindFirstChildOfClass("UIStroke")
+        if stroke and stroke.Enabled and stroke.Transparency < 0.95 then
+            checkSingleColor(stroke.Color, true)
+        end
+        local grad = obj:FindFirstChildOfClass("UIGradient")
+        if grad and grad.Enabled then
+            pcall(function()
+                for _, kp in ipairs(grad.Color.Keypoints) do
+                    checkSingleColor(kp.Value, true)
+                end
+            end)
+        end
+        if string.find(objNameLow, "circle_popup", 1, true)
+            or string.find(objNameLow, "circle_maxe", 1, true)
+            or string.find(objNameLow, "hold", 1, true) then
+            greenDetected = true
+            fishingGuiActive = true
+        elseif string.find(objNameLow, "reel_", 1, true)
+            or objNameLow == "reel"
+            or string.find(objNameLow, "mash", 1, true)
+            or string.find(objNameLow, "tap", 1, true) then
+            blueDetected = true
+            fishingGuiActive = true
+        end
+        if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+            local txtLow = string.lower(tostring(obj.Text or ""))
+            if string.find(txtLow, "hold", 1, true) then
+                greenDetected = true
+                fishingGuiActive = true
+            elseif string.find(txtLow, "tap", 1, true)
+                or string.find(txtLow, "reel", 1, true)
+                or string.find(txtLow, "spam", 1, true)
+                or string.find(txtLow, "pull", 1, true) then
+                blueDetected = true
+                fishingGuiActive = true
+            end
+        end
+        if inFishingContext and (objNameLow == "bar" or objNameLow == "playerbar" or objNameLow == "cursor" or objNameLow == "catchbar") and obj.Parent then
+            local targetObj = obj.Parent:FindFirstChild("fish")
+                or obj.Parent:FindFirstChild("Fish")
+                or obj.Parent:FindFirstChild("target")
+                or obj.Parent:FindFirstChild("Target")
+                or obj.Parent:FindFirstChild("zone")
+                or obj.Parent:FindFirstChild("sweetspot")
+            if targetObj and targetObj:IsA("GuiObject") then
+                pcall(function()
+                    obj.Position = targetObj.Position
+                end)
+            end
+        end
+        if obj:IsA("GuiButton") and inFishingContext then
+            mobileFishBtn = obj
+        end
+        if allowPopupDetect then
+            newPopupDetected = true
+            fishingGuiActive = true
+        end
+    end
 
-                    if hasFishingKeyword(objNameLow) or hasFishingKeyword(parentNameLow) then
-                        fishingGuiActive = true
-                    end
-
-                    -- If a new centered GUI popup became visible after casting
-                    if not baseline[obj] and obj.AbsoluteSize.X >= 25 and obj.AbsoluteSize.Y >= 25 then
-                        newPopupDetected = true
-                        fishingGuiActive = true
-                    end
-
-                    -- 1. Check Colors (BackgroundColor3, ImageColor3, UIStroke, UIGradient)
-                    if obj.BackgroundTransparency < 0.95 then
-                        checkSingleColor(obj.BackgroundColor3, inFishingContext)
-                    end
-                    if (obj:IsA("ImageLabel") or obj:IsA("ImageButton")) and obj.ImageTransparency < 0.95 then
-                        checkSingleColor(obj.ImageColor3, inFishingContext)
-                    end
-                    local stroke = obj:FindFirstChildOfClass("UIStroke")
-                    if stroke and stroke.Enabled and stroke.Transparency < 0.95 then
-                        checkSingleColor(stroke.Color, true)
-                    end
-                    local grad = obj:FindFirstChildOfClass("UIGradient")
-                    if grad and grad.Enabled then
-                        pcall(function()
-                            for _, kp in ipairs(grad.Color.Keypoints) do
-                                checkSingleColor(kp.Value, true)
-                            end
-                        end)
-                    end
-
-                    -- 2. Check Name / Asset / Text cues for Circle Popup / Reel_10..Reel_1
-                    if string.find(objNameLow, "circle_popup", 1, true)
-                        or string.find(objNameLow, "circle_maxe", 1, true)
-                        or string.find(objNameLow, "hold", 1, true) then
-                        greenDetected = true
-                        fishingGuiActive = true
-                    elseif string.find(objNameLow, "reel_", 1, true)
-                        or objNameLow == "reel"
-                        or string.find(objNameLow, "mash", 1, true)
-                        or string.find(objNameLow, "tap", 1, true) then
-                        blueDetected = true
-                        fishingGuiActive = true
-                    end
-
-                    if obj:IsA("TextLabel") or obj:IsA("TextButton") then
-                        local txtLow = string.lower(tostring(obj.Text or ""))
-                        if string.find(txtLow, "hold", 1, true) then
-                            greenDetected = true
-                            fishingGuiActive = true
-                        elseif string.find(txtLow, "tap", 1, true)
-                            or string.find(txtLow, "reel", 1, true)
-                            or string.find(txtLow, "spam", 1, true)
-                            or string.find(txtLow, "pull", 1, true) then
-                            blueDetected = true
-                            fishingGuiActive = true
+    local nowT = tick()
+    local cache = State.PB_FishGuiCache
+    if cache and cache.list and (nowT - cache.t) < 0.5 then
+        local clist = cache.list
+        for ci = 1, #clist do
+            local obj = clist[ci]
+            if obj and obj.Parent and isGuiVisible(obj) then
+                checkObj(obj, true, false)
+            end
+        end
+    else
+        local newList = {}
+        for _, gui in ipairs(PlayerGui:GetChildren()) do
+            if gui ~= ignoreGui and gui ~= StealthESPFolder and gui:IsA("LayerCollector") and gui.Enabled then
+                for _, obj in ipairs(gui:GetDescendants()) do
+                    if obj:IsA("GuiObject") and isGuiVisible(obj) then
+                        local isNew = not baseline[obj]
+                        local inCtx = isNew
+                            or hasFishingKeyword(obj.Name)
+                            or (obj.Parent and hasFishingKeyword(obj.Parent.Name)) or false
+                        local allowPopup = (isNew and obj.AbsoluteSize.X >= 25 and obj.AbsoluteSize.Y >= 25) or false
+                        if inCtx and #newList < 90 then
+                            table.insert(newList, obj)
                         end
-                    end
-
-                    -- 3. Auto-Align Bar/Cursor if a Bar Minigame exists
-                    if inFishingContext and (objNameLow == "bar" or objNameLow == "playerbar" or objNameLow == "cursor" or objNameLow == "catchbar") and obj.Parent then
-                        local targetObj = obj.Parent:FindFirstChild("fish")
-                            or obj.Parent:FindFirstChild("Fish")
-                            or obj.Parent:FindFirstChild("target")
-                            or obj.Parent:FindFirstChild("Target")
-                            or obj.Parent:FindFirstChild("zone")
-                            or obj.Parent:FindFirstChild("sweetspot")
-                        if targetObj and targetObj:IsA("GuiObject") then
-                            pcall(function()
-                                obj.Position = targetObj.Position
-                            end)
-                        end
-                    end
-
-                    -- 4. Detect Mobile Touch Fishing Button
-                    if obj:IsA("GuiButton") and inFishingContext then
-                        mobileFishBtn = obj
+                        checkObj(obj, inCtx, allowPopup)
                     end
                 end
             end
         end
+        State.PB_FishGuiCache = { t = nowT, list = newList }
     end
 
     return {
@@ -3476,7 +3491,7 @@ local function pbReactiveHoldE(maxHoldSeconds, mobileBtn, stage, stopOnGreenClea
     local startT = tick()
     local endT = startT + dur
     while State.Running and Config.PB_AutoFish and tick() < endT do
-        task.wait(0.015)
+        task.wait(0.01)
         local st = pbDetectFishingMinigameState(nil)
         if st.blue then
             -- Blue reel phase started! Release E immediately so we can start rapid-tapping!
@@ -5071,6 +5086,113 @@ task.spawn(function()
     while State.Running do
         if Config.PB_AutoFish then
             pcall(function()
+                -- ===== v7.6 ROUTE 1 — INSTANT VOID-FISH EXPLOIT =====
+                -- The community-found validation gap in Pixel Blade's fishing remote:
+                -- ReplicatedStorage.remotes.fishCaught accepts (Vector3(-1,-1,-1), -1) = "complete the catch at
+                -- the nearest valid spot" with NO minigame and NO line-cast needed. We burst it, verify real
+                -- progress through the Fish leaderstats counter, and auto-DISABLE ourselves if the game patches
+                -- it (3 failed windows) — then Route 2 (the improved smart minigame) carries the farm seamlessly.
+                local fishRemote = State.PB_FishCaughtRemote
+                if fishRemote and not fishRemote.Parent then
+                    State.PB_FishCaughtRemote = nil
+                    fishRemote = nil
+                end
+                if not fishRemote and not State.PB_FishRemoteDead then
+                    local rfolder = getPBRemotes()
+                    fishRemote = rfolder and rfolder:FindFirstChild("fishCaught")
+                    State.PB_FishCaughtRemote = fishRemote
+                end
+                if fishRemote and not State.PB_FishRemoteDead then
+                    State.PB_FishStatusText = "⚡ صيد فوري — fishCaught exploit (بلا ميني جيم)"
+                    pcall(function()
+                        if Config.PB_AutoEquipRod then
+                            local rod = pbEquipFishingRod()
+                            if rod then pcall(function() rod:Activate() end) end
+                        end
+                    end)
+                    local statBefore = nil
+                    pcall(function()
+                        local ls = LocalPlayer:FindFirstChild("leaderstats") or LocalPlayer:FindFirstChild("Leaderstats")
+                        if ls then
+                            for _, stc in ipairs(ls:GetChildren()) do
+                                if string.find(string.lower(stc.Name), "fish", 1, true) and stc:IsA("ValueBase") then
+                                    statBefore = tonumber(stc.Value) or statBefore
+                                end
+                            end
+                        end
+                    end)
+                    for bi = 1, 10 do
+                        if not State.Running or not Config.PB_AutoFish then break end
+                        pcall(function() fishRemote:FireServer(Vector3.new(-1, -1, -1), -1) end)
+                        task.wait(0.05)
+                    end
+                    State.PB_FishCaughtCount = State.PB_FishCaughtCount + 10
+                    local statAfter = nil
+                    pcall(function()
+                        local ls = LocalPlayer:FindFirstChild("leaderstats") or LocalPlayer:FindFirstChild("Leaderstats")
+                        if ls then
+                            for _, stc in ipairs(ls:GetChildren()) do
+                                if string.find(string.lower(stc.Name), "fish", 1, true) and stc:IsA("ValueBase") then
+                                    statAfter = tonumber(stc.Value) or statAfter
+                                end
+                            end
+                        end
+                    end)
+                    if statBefore ~= nil and statAfter ~= nil then
+                        if statAfter > statBefore then
+                            State.PB_FishRemoteFails = 0
+                        else
+                            State.PB_FishRemoteFails = (State.PB_FishRemoteFails or 0) + 1
+                            if State.PB_FishRemoteFails >= 3 then
+                                State.PB_FishRemoteDead = true
+                                State.PB_FishStatusText = "⚠️ الريمو مقفّل من التحديث — رجوع للميني جيم الذكي"
+                            end
+                        end
+                    end
+                    task.wait(0.3)
+                    return
+                end
+
+                -- ===== v7.6 ROUTE 2 — improved smart minigame engine =====
+                -- Walk-to-spot pre-stage: if there is no fishing prompt in cast range, find the closest fish
+                -- prompt ANYWHERE once (cheap single scan), walk to it with MoveTo nudges, and only then cast.
+                local wpPrompt = pbFindFishingPrompt(true)
+                if not wpPrompt and HumanoidRootPart and Humanoid then
+                    local wBestPos, wBestD = nil, math.huge
+                    for _, desc in ipairs(workspace:GetDescendants()) do
+                        if desc:IsA("ProximityPrompt") and desc.Enabled and (hasFishingKeyword(desc.Name)
+                            or hasFishingKeyword(desc.ActionText) or hasFishingKeyword(desc.ObjectText)) then
+                            local wPart = desc.Parent
+                            if wPart and wPart:IsA("Model") then
+                                wPart = wPart.PrimaryPart or wPart:FindFirstChildWhichIsA("BasePart", true)
+                            elseif wPart and not wPart:IsA("BasePart") then
+                                wPart = wPart:FindFirstChildWhichIsA("BasePart", true) or (wPart.Parent and wPart.Parent:IsA("BasePart") and wPart.Parent)
+                            end
+                            if wPart and wPart:IsA("BasePart") then
+                                local wd = (wPart.Position - HumanoidRootPart.Position).Magnitude
+                                if wd < wBestD then
+                                    wBestD = wd
+                                    wBestPos = wPart.Position
+                                end
+                            end
+                        end
+                    end
+                    if wBestPos and wBestD > 20 then
+                        local wT0 = tick()
+                        while wBestPos and State.Running and Config.PB_AutoFish
+                            and not pbFindFishingPrompt(false) and (tick() - wT0) < 25 do
+                            State.PB_FishStatusText = string.format("🚶 أقرب سبوت صيد على بعد %d — أمشي...", math.floor(wBestD))
+                            pcall(function()
+                                wBestD = (wBestPos - HumanoidRootPart.Position).Magnitude
+                                if wBestD > 14 then
+                                    Humanoid:MoveTo(wBestPos + Vector3.new(0, 2, 0))
+                                end
+                            end)
+                            task.wait(0.3)
+                        end
+                    end
+                end
+
                 -- Snapshot baseline visible GUI before casting so any new minigame popup is caught at 60FPS
                 pbSnapshotBaselineGui(nil)
 
@@ -5160,7 +5282,7 @@ task.spawn(function()
                         break
                     end
 
-                    task.wait(0.015)
+                    task.wait(0.01)
                 end
             end)
         else
@@ -5631,8 +5753,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v7.5 | Pixel Blade [W4 Trap Immunity + Flight Dodge]"
-    or "⚔️ Delta Hub v7.5 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v7.6 | Pixel Blade [Instant Void-Fish + Cached Minigame]"
+    or "⚔️ Delta Hub v7.6 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -6001,7 +6123,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.5 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.6 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6624,4 +6746,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v7.5] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v7.6] Loaded! Active Game Detected: " .. tostring(CurrentGame))
