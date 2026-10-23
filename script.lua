@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v7.6 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v7.7 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.6)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.7)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -2867,9 +2867,82 @@ end
 --    Gathers all OTHER active enemies in the current open room (hadEntrance == true, within <= 85 studs, non-Boss)
 --    directly onto the primary target's CFrame (6.0 studs in front of the player, with their backs turned to the player)
 --    so the player's Auto-Clicker sword swings + Overhead jumps + pbDamageModel cleave and kill ALL enemies in one spot!
+-- v7.7 HITBOX-EXPANDER HARDENED (user asked: «هل يعمل حقًا أم مزحة؟» — honest answer: the old code matched
+-- ONLY the exact part name "basehitbox" on every mob; if the game's update renamed or re-parented those
+-- hitboxes, the expander silently did NOTHING at all). Now it matches ANY part whose name CONTAINS
+-- "hitbox"/"hurtbox" (direct children first, then a recursive sweep), expands up to 6 parts per mob, falls
+-- back to the humanoid root when no named hitbox exists, remembers every ORIGINAL size, and Loop 2E restores
+-- them when the toggle is switched off so the game never stays warped.
+local function pbExpandHitboxesFor(model, sz)
+    if not State.PB_HitboxOriginal then
+        State.PB_HitboxOriginal = setmetatable({}, { __mode = "k" })
+    end
+    local origMap = State.PB_HitboxOriginal
+    local applied = 0
+    local function tryPart(p)
+        if applied < 6 and p:IsA("BasePart") then
+            local pn = string.lower(p.Name)
+            if string.find(pn, "hitbox", 1, true) or string.find(pn, "hurtbox", 1, true) then
+                if origMap[p] == nil then
+                    origMap[p] = p.Size
+                end
+                if p.Size.X < sz.X or p.Size.Y < sz.Y or p.Size.Z < sz.Z then
+                    p.Size = sz
+                end
+                p.CanCollide = false
+                p.Massless = true
+                applied = applied + 1
+            end
+        end
+    end
+    pcall(function()
+        for _, p in ipairs(model:GetChildren()) do
+            tryPart(p)
+        end
+        if applied == 0 then
+            for _, p in ipairs(model:GetDescendants()) do
+                if applied >= 6 then break end
+                tryPart(p)
+            end
+        end
+        if applied == 0 then
+            local root = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso") or model.PrimaryPart
+            if root and root:IsA("BasePart") then
+                if origMap[root] == nil then
+                    origMap[root] = root.Size
+                end
+                if root.Size.X < sz.X or root.Size.Y < sz.Y then
+                    root.Size = sz
+                end
+                root.CanCollide = false
+                applied = 1
+            end
+        end
+    end)
+    return applied > 0
+end
+
 local function pbBringAndExpandTargets()
     refreshCharacterRefs()
     if not HumanoidRootPart then return end
+    -- v7.7 restore path: when the toggle got switched OFF (and nothing else still needs expansion), put every
+    -- part back to its original size ONCE, then clear the pending flag.
+    if State.PB_HitboxRestorePending and not Config.PB_ExpandHitbox
+        and not Config.PB_AutoFarmDungeon and not Config.PB_AutoFarmRaid
+        and not Config.PB_BringMobs and not Config.PB_KillAura then
+        local origR = State.PB_HitboxOriginal
+        if origR then
+            for pR, sR in pairs(origR) do
+                pcall(function()
+                    if pR and pR.Parent then
+                        pR.Size = sR
+                    end
+                end)
+            end
+            State.PB_HitboxOriginal = setmetatable({}, { __mode = "k" })
+        end
+        State.PB_HitboxRestorePending = nil
+    end
     local sz = Vector3.new(Config.PB_HitboxSize or 45, Config.PB_HitboxSize or 45, Config.PB_HitboxSize or 45)
     local isAutoFarming = Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid
     local isRaid = Config.PB_AutoFarmRaid
@@ -2888,10 +2961,8 @@ local function pbBringAndExpandTargets()
         if v and v.Parent and isPBTrueEnemy(v, true, true) then
             pcall(function()
                 local bh = v:FindFirstChild("basehitbox") or v:FindFirstChild("basehitbox", true)
-                if bh and bh:IsA("BasePart") and (Config.PB_ExpandHitbox or isAutoFarming or Config.PB_KillAura or Config.PB_BringMobs) then
-                    bh.Size = sz
-                    bh.CanCollide = false
-                    bh.Massless = true
+                if Config.PB_ExpandHitbox or isAutoFarming or Config.PB_KillAura or Config.PB_BringMobs then
+                    pbExpandHitboxesFor(v, sz)
                 end
                 local eHrp = v:FindFirstChild("HumanoidRootPart")
                 if eHrp and eHrp:IsA("BasePart") then
@@ -4480,7 +4551,7 @@ end)
 task.spawn(function()
     while State.Running do
         task.wait(0.45)
-        if Config.PB_ExpandHitbox or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_BringMobs then
+        if Config.PB_ExpandHitbox or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_BringMobs or State.PB_HitboxRestorePending then
             pcall(pbBringAndExpandTargets)
         end
     end
@@ -5753,8 +5824,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v7.6 | Pixel Blade [Instant Void-Fish + Cached Minigame]"
-    or "⚔️ Delta Hub v7.6 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v7.7 | Pixel Blade [Real Hitbox Expander (Multi-Name + Restore)]"
+    or "⚔️ Delta Hub v7.7 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -6123,7 +6194,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.6 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.7 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6239,6 +6310,9 @@ if CurrentGame == "PixelBlade" then
 
     addToggle(TabPBFarm, "تكبير هيت بوكس الأعداء (Expand Enemy Hitbox)", Config.PB_ExpandHitbox, function(val)
         Config.PB_ExpandHitbox = val
+        if not val then
+            State.PB_HitboxRestorePending = true
+        end
     end)
 
     addStepper(TabPBFarm, "حجم هيت بوكس الأعداء", 5, 80, 5, Config.PB_HitboxSize, function(val)
@@ -6746,4 +6820,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v7.6] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v7.7] Loaded! Active Game Detected: " .. tostring(CurrentGame))
