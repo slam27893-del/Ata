@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v7.2 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v7.3 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.2)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.3)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -310,7 +310,7 @@ local Config = {
     PB_BringMobs = true,
     PB_ExpandHitbox = true,
     PB_HitboxSize = 45,
-    PB_AutoUpgrade = true,
+    PB_AutoUpgrade = false, -- v7.3: auto pick upgrade REMOVED at user request (kept as internal flag only)
     PB_AutoReplayDungeon = true,
     PB_ReplayArmed = false,
     PB_LastDungeonWorld = "SunkenDepths",
@@ -385,11 +385,12 @@ local function loadSavedConfig()
         end
         -- Migrate pre-v5.2 configs: Auto Replay Dungeon + Player Protection are enabled by default
         if not loadedTable.PB_MigratedV52 then
-            Config.PB_AutoUpgrade = true
             Config.PB_AutoReplayDungeon = true
             Config.PB_PlayerProtection = true
             Config.PB_MigratedV52 = true
         end
+        -- v7.3: saved configs may still carry PB_AutoUpgrade=true — force it off permanently
+        Config.PB_AutoUpgrade = false
     else
         Config.PB_MigratedV52 = true
     end
@@ -4204,12 +4205,8 @@ task.spawn(function()
     while State.Running do
         task.wait(0.25)
         pcall(function()
-            if not Config.PB_AutoUpgrade then
-                State.PB_UpgradePopupOpen = false
-                pickAttempts = 0
-                return
-            end
-
+            -- v7.3: UI hygiene stays ON even though auto-pick is removed: kill the death/screen blur and drag
+            -- any off-screen-parked upgradeFrame back into view so the MANUAL card pick is always visible.
             local dBlur = Lighting:FindFirstChild("deathBlur")
             if dBlur and dBlur.Size ~= 0 then dBlur.Size = 0 end
             local sBlur = Lighting:FindFirstChild("screenBlur")
@@ -4219,6 +4216,15 @@ task.spawn(function()
             local upgFrame = gameUI and gameUI:FindFirstChild("upgradeFrame")
             if upgFrame and upgFrame.Position.Y.Scale < -0.2 then
                 upgFrame.Position = UDim2.new(0, 0, 0, 0)
+            end
+
+            -- v7.3 AUTO-PICK REMOVED (user: lag suspect): every frame since here depends on the flag, which is
+            -- now forced off forever — the scan/click machinery below never executes (and State.PB_UpgradePopupOpen
+            -- stays false, so combat is never paused and the background full-UI scan never runs at all).
+            if not Config.PB_AutoUpgrade then
+                State.PB_UpgradePopupOpen = false
+                pickAttempts = 0
+                return
             end
 
             local now = tick()
@@ -5563,8 +5569,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v7.2 | Pixel Blade [Zero-Lag Popup Scan + Priority Intact]"
-    or "⚔️ Delta Hub v7.2 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v7.3 | Pixel Blade [Auto-Pick Removed — Manual Upgrades, Max FPS]"
+    or "⚔️ Delta Hub v7.3 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5933,7 +5939,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.2 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.3 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -5982,9 +5988,7 @@ if CurrentGame == "PixelBlade" then
         Config.PB_AutoReplayDungeon = val
     end)
 
-    addToggle(TabPBFarm, "اختيار الترقية تلقائياً بالدنجن (Auto Pick Upgrade)", Config.PB_AutoUpgrade, function(val)
-        Config.PB_AutoUpgrade = val
-    end)
+    -- v7.3: Auto Pick Upgrade toggle REMOVED at user request (feature retired; manual picks only)
 
     addToggle(TabPBFarm, "🛡️ حماية اللاعب من ضرب الوحوش (Monster Damage Shield)", Config.PB_PlayerProtection, function(val)
         Config.PB_PlayerProtection = val
@@ -6558,4 +6562,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v7.2] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v7.3] Loaded! Active Game Detected: " .. tostring(CurrentGame))
