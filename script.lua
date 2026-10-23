@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v7.0 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v7.1 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.0)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.1)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -1702,14 +1702,10 @@ local function isPBTrueEnemy(mob, isRaid, allowNearbyNoAttribute)
     local allyMark = allyCache[mob]
     if allyMark == nil then
         allyMark = isPBPlayerModel(mob)
-        if not allyMark then
-            -- v7.0 NPC ALLY-BOT GUARD (user: raid allies are GAME BOTS, not players — GetPlayerFromCharacter
-            -- misses them): Pixel Blade mobs never use a Roblox player rig, so any foreign model built like a
-            -- player character (Head + Torso/UpperTorso + arms) is a friendly -> never target/stun/follow it.
-            allyMark = mob:FindFirstChild("Head") ~= nil
-                and (mob:FindFirstChild("Torso") ~= nil or mob:FindFirstChild("UpperTorso") ~= nil)
-                and (mob:FindFirstChild("Left Arm") ~= nil or mob:FindFirstChild("LeftLowerArm") ~= nil)
-        end
+        -- v7.1 REGRESSION HOTFIX: the v7.0 rig-shape heuristic is REMOVED — Pixel Blade mobs (Sunken Zombie,
+        -- Abyssal Archer, ...) are themselves built on full player rigs (Head+Torso+arms), so the filter marked
+        -- EVERY real enemy as an ally bot and combat died completely. Ally NPC bots are handled ONLY by the
+        -- re-gated no-damage stale watch (judges just the model combat is actively swinging at).
         allyMark = allyMark and true or false
         allyCache[mob] = allyMark
     end
@@ -2036,30 +2032,31 @@ local function findBestPBTarget(isRaid)
                     end
                 end
 
-                -- v7.0 NO-DAMAGE STALE WATCH (self-healing anti-freeze): a model whose Health never moves while
-                -- we hammer it at melee range for 7 straight seconds is NOT damageable (ally bot, decoration,
-                -- scripted-invulnerable). Ban it 25s (120s on repeat) instead of wedging in place forever.
-                -- Real mobs always bleed; boss names excluded (legit invulnerable phases).
-                if PB_BOSS_NAMES[v.Name] ~= true and (not ignoreUntil or now >= ignoreUntil) then
-                    local hum0 = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
-                    if hum0 and hum0.Health > 0 and distFromMe <= 55 then
-                        if not State.PB_MobStale then
-                            State.PB_MobStale = setmetatable({}, { __mode = "k" })
+                -- v7.1 RE-GATED NO-DAMAGE STALE WATCH: ONLY the model the combat loop is actively swinging at right now
+                -- (State.PB_AttackFocus, refreshed every farm-loop iteration) may be judged — mobs merely visible
+                -- through a wall are NEVER touched (v7.0 blacklisted idle next-room mobs and killed farming).
+                -- 10s of EXACTLY zero HP delta while being attacked at melee range = NOT damageable (raid ally
+                -- bots, decorations) -> skip 20s (60s on repeat strike). Real mobs always bleed; named bosses
+                -- excluded (legit invulnerable pillar phases).
+                if State.PB_AttackFocus == v and distFromMe <= 45 and watchHum
+                    and watchHum.Health > 0 and PB_BOSS_NAMES[v.Name] ~= true
+                    and (tick() - (State.PB_AttackFocusTick or 0)) < 1.5 then
+                    if not State.PB_MobStale then
+                        State.PB_MobStale = setmetatable({}, { __mode = "k" })
+                    end
+                    if not State.PB_MobStaleStrikes then
+                        State.PB_MobStaleStrikes = setmetatable({}, { __mode = "k" })
+                    end
+                    local stw = State.PB_MobStale[v]
+                    if stw and stw.hp == watchHum.Health then
+                        if now - stw.since >= 10.0 then
+                            local strikes = (State.PB_MobStaleStrikes[v] or 0) + 1
+                            State.PB_MobStaleStrikes[v] = strikes
+                            invulnMap[v] = now + (strikes >= 2 and 60 or 20)
+                            State.PB_MobStale[v] = nil
                         end
-                        if not State.PB_MobStaleStrikes then
-                            State.PB_MobStaleStrikes = setmetatable({}, { __mode = "k" })
-                        end
-                        local stw = State.PB_MobStale[v]
-                        if stw and stw.hp == hum0.Health then
-                            if now - stw.since >= 7.0 then
-                                local strikes = (State.PB_MobStaleStrikes[v] or 0) + 1
-                                State.PB_MobStaleStrikes[v] = strikes
-                                invulnMap[v] = now + (strikes >= 2 and 120 or 25)
-                                State.PB_MobStale[v] = nil
-                            end
-                        else
-                            State.PB_MobStale[v] = { hp = hum0.Health, since = now }
-                        end
+                    else
+                        State.PB_MobStale[v] = { hp = watchHum.Health, since = now }
                     end
                 end
 
@@ -4465,6 +4462,9 @@ task.spawn(function()
                     local mob, mobPart = findBestPBTarget(isRaid)
                     if mob and mobPart then
                         State.PB_ZeroEnemySinceTick = nil
+                        -- v7.1: the ONE model combat is currently fighting (the stale watch judges ONLY this)
+                        State.PB_AttackFocus = mob
+                        State.PB_AttackFocusTick = tick()
                         local dist = math.floor((mobPart.Position - HumanoidRootPart.Position).Magnitude)
                         local hp = math.floor(getPBMobCurrentHP(mob))
                         local hadEnt = mob:GetAttribute("hadEntrance")
@@ -5559,8 +5559,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v7.0 | Pixel Blade [Band-Read Priority + Ally-Bot Safe]"
-    or "⚔️ Delta Hub v7.0 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v7.1 | Pixel Blade [Band-Read Priority + Enemy Targeting RESTORED]"
+    or "⚔️ Delta Hub v7.1 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5929,7 +5929,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.0 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.1 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6554,4 +6554,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v7.0] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v7.1] Loaded! Active Game Detected: " .. tostring(CurrentGame))
