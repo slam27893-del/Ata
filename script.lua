@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v7.3 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v7.4 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.3)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.4)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -4602,6 +4602,28 @@ task.spawn(function()
                             end
                         end
 
+                        -- v7.4 W5 FLIGHT-PHASE DODGE (user: "البوس الأخير في العالم 5، الطور الثاني لما
+                        -- يطير، اللاعب يقعد يهاجمه فيموت"): while the BOSS target hovers >12 studs above the
+                        -- player's own Y, no melee can EVER land and standing under it = eating the dive-bomb.
+                        -- Freeze advancing, back off ~28 studs, resume instantly when it descends. Implemented
+                        -- AFTER the pillar/stall watchers: if the phase needs pillars, findBestPBTarget returns
+                        -- a pillar (no HumanoidRootPart) and this gate skips — pillar breaking continues even
+                        -- mid-flight. Pure Y-delta math: zero raycasts, zero frame cost in normal fights.
+                        local aBossish = mobIsRealBoss or hadEnt == true
+                        if aBossish then
+                            local aRoot = mob:FindFirstChild("HumanoidRootPart")
+                            if aRoot and aRoot:IsA("BasePart") and (aRoot.Position.Y - HumanoidRootPart.Position.Y) > 12 then
+                                State.PB_ActiveFollowMob = nil
+                                State.PB_ActiveFollowPart = nil
+                                local aAway = HumanoidRootPart.Position - aRoot.Position
+                                aAway = Vector3.new(aAway.X, 0, aAway.Z)
+                                if aAway.Magnitude < 1 then aAway = Vector3.new(0, 0, 1) end
+                                Humanoid:MoveTo(HumanoidRootPart.Position + aAway.Unit * (dist < 34 and 30 or 12))
+                                State.PB_DungeonStatusText = "🕊️ الزعيم يطير! نتفادى الغوص حتى ينزل..."
+                                return
+                            end
+                        end
+
                         local isHealerTarget = pbIsHealerOrDrainerEnemy(mob)
                         local isRangedTarget = not isHealerTarget and pbIsRangedEnemy(mob)
                         local priorityTag = isHealerTarget and "💉 [معالج/مستنزف]" or (isRangedTarget and "🏹 [بعيد المدى]" or "⚔️")
@@ -5569,8 +5591,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v7.3 | Pixel Blade [Auto-Pick Removed — Manual Upgrades, Max FPS]"
-    or "⚔️ Delta Hub v7.3 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v7.4 | Pixel Blade [Morvik Flight-Phase Dodge]"
+    or "⚔️ Delta Hub v7.4 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5939,7 +5961,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.3 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.4 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6562,4 +6584,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v7.3] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v7.4] Loaded! Active Game Detected: " .. tostring(CurrentGame))
