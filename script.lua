@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v7.1 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v7.2 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.1)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.2)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -3862,7 +3862,7 @@ local function pbGroupRows(list, vp, yTol)
 end
 
 -- v6.0 ONE-PASS detector. Returns: picks (maybe nil), anyPickLabel, anyBannerWord (popup text evidence)
-local function pbScanUpgradePopup(strongEvidence)
+local function pbScanUpgradePopup(strongEvidence, wantTexts)
     local vp = pbGetVP()
     local nodes, btns, cards = {}, {}, {}
     local anyPickLabel = false
@@ -3880,7 +3880,7 @@ local function pbScanUpgradePopup(strongEvidence)
             local nameLow = pbNormTxt(d.Name)
             -- v7.0: harvest EVERY readable string near the popup (text, instance name, attribute values) for
             -- the spatial band scorer — generic container names excluded so only card-meaning words survive.
-            if #texts < 240 then
+            if wantTexts and #texts < 240 then
                 local extra = ""
                 if ownText ~= "" and #ownText >= 2 then
                     extra = extra .. " " .. ownText
@@ -4228,7 +4228,11 @@ task.spawn(function()
             local cutscene = workspace:FindFirstChild("inCutscene")
             local strongEvidence = ((cutscene and cutscene.Value == true) or (upgFrame and isGuiVisible(upgFrame))) and true or false
 
-            local picks, anyPickLabel, anyBannerWord = pbScanUpgradePopup(strongEvidence)
+            -- v7.2 FPS FIX: the v7.0 per-object name/attribute harvest ran on the BACKGROUND detection scan every
+            -- 0.45s through the whole fight -> mobile frame drops. Harvest now runs ONLY while the popup episode is
+            -- open (combat is paused then anyway, and the 1.8s anim-guard window lets 3+ full scans score the
+            -- cards before any click). Normal combat keeps the cheap detection walk of v6.9.
+            local picks, anyPickLabel, anyBannerWord = pbScanUpgradePopup(strongEvidence, (strongEvidence or State.PB_UpgradePopupOpen) and true or false)
             local popupSuspected = strongEvidence or anyPickLabel or anyBannerWord
 
             if popupSuspected then
@@ -5559,8 +5563,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v7.1 | Pixel Blade [Band-Read Priority + Enemy Targeting RESTORED]"
-    or "⚔️ Delta Hub v7.1 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v7.2 | Pixel Blade [Zero-Lag Popup Scan + Priority Intact]"
+    or "⚔️ Delta Hub v7.2 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -5929,7 +5933,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.1 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.2 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6554,4 +6558,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v7.1] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v7.2] Loaded! Active Game Detected: " .. tostring(CurrentGame))
