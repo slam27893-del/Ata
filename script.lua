@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v8.5 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v8.6 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v8.5)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v8.6)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -2468,8 +2468,16 @@ local function pbProtectPlayerFromMonsters()
                         State.PB_DisarmedMobs[v] = true
                         pcall(function()
                             for _, desc in ipairs(v:GetDescendants()) do
-                                if desc:IsA("BasePart") and desc.Name ~= "basehitbox" then
-                                    desc.CanTouch = false
+                                if desc:IsA("BasePart") then
+                                    if desc.Name ~= "basehitbox" then
+                                        desc.CanTouch = false
+                                    end
+                                    -- v8.6 FPS: mob rigs ship particle/trail effects; with 8+ rigs on screen they
+                                    -- are a real GPU cost on mobile. Once per mob = permanent saving.
+                                    if desc.CastShadow then desc.CastShadow = false end
+                                elseif desc:IsA("ParticleEmitter") or desc:IsA("Trail") or desc:IsA("Beam")
+                                    or desc:IsA("Smoke") or desc:IsA("Fire") or desc:IsA("Sparkles") then
+                                    if desc.Enabled then desc.Enabled = false end
                                 end
                             end
                         end)
@@ -2949,19 +2957,29 @@ local function pbDungeonObjectiveTravel()
     refreshCharacterRefs()
     if not HumanoidRootPart or not Humanoid then return false end
     local now = tick()
-    -- v8.4 safety: leaving a room is only legal when nothing alive is around. Walking away from an immune boss
-    -- phase would soft-lock the chapter, so the traveller refuses while any living enemy is within 220 studs.
+    -- v8.6 MOVEMENT FIX — this gate used to call isPBMobAlive, which is true for EVERY rig with a Humanoid:
+    -- dormant mobs in the NEXT room, ally bots, hazards... So one sleeping mob 200 studs away blocked travel
+    -- forever and the bot just stood there ("التنقل ما انحل"). Now it uses the central enemy filter (traps,
+    -- allies and un-activated room mobs excluded), only blocks for enemies actually in our room, and can never
+    -- hold longer than 20s — a soft-lock is impossible.
     do
         local myPos0 = HumanoidRootPart.Position
+        local liveNear = 0
         local list0 = collectAllPBModels()
         for i = 1, #list0 do
             local m = list0[i]
-            if m and m.Parent and isPBMobAlive(m) then
+            if m and m.Parent and isPBTrueEnemy(m, false, true) then
                 local p0 = getPBMobTargetPart(m)
-                if p0 and (p0.Position - myPos0).Magnitude <= 220 then
-                    return false
+                if p0 and (p0.Position - myPos0).Magnitude <= 120 then
+                    liveNear = liveNear + 1
                 end
             end
+        end
+        if liveNear > 0 then
+            if not State.PB_TravelBlockSince then State.PB_TravelBlockSince = now end
+            if (now - State.PB_TravelBlockSince) < 20.0 then return false end
+        else
+            State.PB_TravelBlockSince = nil
         end
     end
     -- Forward probe (nested closure so the main chunk stays under Lua's 200-local limit): last-resort progression
@@ -3004,17 +3022,32 @@ local function pbDungeonObjectiveTravel()
         return true
     end
 
-    -- v8.5: a living BOSS is never abandoned — walking away from it into another room is exactly what wedged the
-    -- run before (the boss follows, its room never registers as cleared).
+    -- v8.6: a boss that is ACTIVELY attackable in our room is never abandoned (that is what wedged runs before),
+    -- but a dormant/named boss in another room no longer freezes the traveller forever, and even the active case
+    -- releases after 25s so the run can recover.
     do
         local listB = collectAllPBModels()
         for i = 1, #listB do
             local b = listB[i]
-            if b and b.Parent and isPBMobAlive(b) then
+            if b and b.Parent and isPBTrueEnemy(b, false, false) then
                 local isBossB = PB_BOSS_NAMES[b.Name] == true or b:FindFirstChild("worm") ~= nil or b.Name == "BookHand"
-                if isBossB then return false end
+                local bp = getPBMobTargetPart(b)
+                if isBossB and bp and (bp.Position - HumanoidRootPart.Position).Magnitude <= 150 then
+                    if not State.PB_BossHoldSince then State.PB_BossHoldSince = now end
+                    if (now - State.PB_BossHoldSince) < 25.0 then return false end
+                end
             end
         end
+        local anyNearBoss = false
+        for i = 1, #listB do
+            local b = listB[i]
+            if b and b.Parent and isPBTrueEnemy(b, false, false) then
+                local isBossB = PB_BOSS_NAMES[b.Name] == true or b:FindFirstChild("worm") ~= nil
+                local bp = getPBMobTargetPart(b)
+                if isBossB and bp and (bp.Position - HumanoidRootPart.Position).Magnitude <= 150 then anyNearBoss = true end
+            end
+        end
+        if not anyNearBoss then State.PB_BossHoldSince = nil end
     end
     local target = State.PB_ExitTarget
     local prompt = State.PB_ExitPrompt
@@ -3033,6 +3066,34 @@ local function pbDungeonObjectiveTravel()
             end
         end
         cands = valid
+        -- v8.6 fallback: any workspace Model with a PURE NUMERIC name (the convention every Pixel Blade world uses
+        -- for its rooms) that we are not standing in yet — walk into it. This is what actually advances W5 chapters
+        -- when the room exposes no "exit"-named object at all.
+        if #cands == 0 then
+            local myP = HumanoidRootPart.Position
+            local bestRoom, bestD = nil, math.huge
+            for _, ch in ipairs(workspace:GetChildren()) do
+                if ch:IsA("Model") and string.match(ch.Name, "^%d+$") then
+                    local okp, pv = pcall(function() return ch:GetPivot().Position end)
+                    if okp and pv then
+                        local dd = (pv - myP).Magnitude
+                        if dd > 45 and dd <= 320 and dd < bestD then
+                            bestD, bestRoom = dd, pv
+                        end
+                    end
+                end
+            end
+            if bestRoom then
+                State.PB_ExitTarget = nil
+                Humanoid:MoveTo(bestRoom)
+                if (now - (State.PB_ExitJumpAt or 0)) >= 0.8 then
+                    State.PB_ExitJumpAt = now
+                    Humanoid.Jump = true
+                end
+                State.PB_DungeonStatusText = string.format("🚪 التوجه للغرفة التالية (%dم)...", math.floor(bestD))
+                return true
+            end
+        end
         if #cands == 0 then
             State.PB_ExitCache = nil
             -- v8.4 no named exit at all (W5 chapter corridors) -> crawl forward over confirmed floor, but only
@@ -3248,6 +3309,9 @@ local function pbBringAndExpandTargets()
         gatherGrounded = workspace:Raycast(gatherPos + Vector3.new(0, 8, 0), Vector3.new(0, -60, 0), rp) ~= nil
     end)
 
+    -- v8.6: on a device already under 15 FPS, teleporting rigs around is the worst thing we can do — the gather
+    -- (physics) part is skipped entirely while the hitbox pass keeps running. Auto-recovers when FPS climbs back.
+    local gatherAllowed = (State.PB_FpsAvg or 60) >= 15
     local allModels = collectAllPBModels()
     for _, v in ipairs(allModels) do
         if v and v.Parent and isPBTrueEnemy(v, true, true) then
@@ -3265,7 +3329,7 @@ local function pbBringAndExpandTargets()
                 end
                 if eHrp and eHrp:IsA("BasePart") then
 
-                    if Config.PB_BringMobs then
+                    if Config.PB_BringMobs and gatherAllowed then
                         local hadEnt = v:GetAttribute("hadEntrance")
                         local isBoss = PB_BOSS_NAMES[v.Name] == true or v.Name == "Maneater" or v.Name == "BookHand" or (v:FindFirstChild("worm") ~= nil)
                         if isAutoFarming then
@@ -3280,7 +3344,10 @@ local function pbBringAndExpandTargets()
                                 -- room-locked: distance is measured from the ACTIVE TARGET (same room cluster)
                                 local anchor = activeFollowPart and activeFollowPart.Parent and activeFollowPart.Position or gatherPos
                                 local dAnchor = (eHrp.Position - anchor).Magnitude
-                                if distToGather > 2.5 and dAnchor <= 60 and distToGather <= 160 then
+                                -- v8.6 PHYSICS LOAD: only 8 rigs are ever piled up. Every gathered mob is a full
+                                -- Humanoid rig; 20-30 of them colliding in a 5-stud radius is O(n^2) physics on a
+                                -- phone and is exactly the 4-6 FPS report. 8 is plenty for sword AOE.
+                                if distToGather > 2.5 and dAnchor <= 60 and distToGather <= 160 and gatherSlot < 8 then
                                     local slotMap = State.PB_GatherSlotMap
                                     if not slotMap then
                                         slotMap = setmetatable({}, { __mode = "k" })
@@ -3289,12 +3356,12 @@ local function pbBringAndExpandTargets()
                                     local idx = slotMap[v]
                                     if not idx then
                                         gatherSlot = gatherSlot + 1
-                                        if gatherSlot > 15 then gatherSlot = 15 end
+                                        if gatherSlot > 8 then gatherSlot = 8 end
                                         idx = gatherSlot
                                         slotMap[v] = idx
                                     end
                                     local targetCF = slotCF(idx)
-                                    if (eHrp.Position - targetCF.Position).Magnitude > 7 and gatherMoved < (((State.PB_FpsAvg or 60) < 20) and 5 or 12) then
+                                    if (eHrp.Position - targetCF.Position).Magnitude > 12 and gatherMoved < (((State.PB_FpsAvg or 60) < 20) and 3 or 6) then
                                         gatherMoved = gatherMoved + 1
                                         eHrp.AssemblyLinearVelocity = Vector3.zero
                                         eHrp.AssemblyAngularVelocity = Vector3.zero
@@ -3313,7 +3380,7 @@ local function pbBringAndExpandTargets()
                             -- v8.3 Manual mode: pull range 65 -> 120 studs, same ring placement (never stacked)
                             if gatherGrounded and not isBoss and (isRaid or hadEnt == true or (eHrp.Position - HumanoidRootPart.Position).Magnitude <= 95) then
                                 local dMe = (eHrp.Position - gatherPos).Magnitude
-                                if dMe <= 60 and dMe > 2.5 then
+                                if dMe <= 60 and dMe > 2.5 and gatherSlot < 6 then
                                     local slotMap = State.PB_GatherSlotMap
                                     if not slotMap then
                                         slotMap = setmetatable({}, { __mode = "k" })
@@ -4253,7 +4320,16 @@ end
 local function pbEachUiObject(fn)
     pcall(function()
         local hub = State.HubScreenGui
-        for _, d in ipairs(PlayerGui:GetDescendants()) do
+        -- v8.6 FPS: PlayerGui:GetDescendants() allocates a huge array every call (Pixel Blade's UI is massive) and
+        -- the replay ticker calls this ~1x/second => a guaranteed stutter spike every second on mobile. The list
+        -- is now cached for 3s; only GUIs get added/removed in practice, not thousands of objects.
+        local nowU = tick()
+        local cache = State.PB_UiListCache
+        if not cache or (nowU - (cache.t or 0)) > 3.0 then
+            cache = { t = nowU, list = PlayerGui:GetDescendants() }
+            State.PB_UiListCache = cache
+        end
+        for _, d in ipairs(cache.list) do
             if d:IsA("GuiObject") and isGuiVisible(d) then
                 local ok = true
                 local p = d
@@ -4851,6 +4927,15 @@ local function pbApplyFpsBoost()
         pcall(function()
             game:GetService("RunService"):Set3dResolutionScaleEnabled(true)
         end)
+        -- v8.6: the REAL mobile lever. Roblox's own graphics quality setting (not just our visuals): drops
+        -- shadows/AA/postFX at the engine level instead of asking the game to do it.
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        end)
+        pcall(function()
+            local ugs = UserSettings():GetService("UserGameSettings")
+            ugs.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1
+        end)
     end
 end
 task.spawn(function()
@@ -5315,9 +5400,9 @@ task.spawn(function()
                         local isRangedTarget = not isHealerTarget and pbIsRangedEnemy(mob)
                         local priorityTag = isHealerTarget and "💉 [معالج/مستنزف]" or (isRangedTarget and "🏹 [بعيد المدى]" or "⚔️")
                         State.PB_DungeonStatusText = string.format(
-                            "%s يهاجم: %s | المسافة: %d | HP: %d | سلاحك: %d",
+                            "%s يهاجم: %s | المسافة: %d | HP: %d | سلاحك: %d | %d FPS",
                             priorityTag,
-                            tostring(mob.Name), dist, hp, currentPBWeaponDamage()
+                            tostring(mob.Name), dist, hp, currentPBWeaponDamage(), math.floor(State.PB_FpsAvg or 0)
                         )
 
                         -- Korth Boss Room Entrance Handling
@@ -5782,6 +5867,21 @@ task.spawn(function()
         task.wait(0.9)
         if CurrentGame == "PixelBlade" and Config.PB_AutoReplayDungeon then
             pcall(function()
+                -- v8.6: the end-screen scan is pointless (and expensive) while enemies are still alive or when we
+                -- are not inside a dungeon at all. Both checks are cheap and remove most of the per-second cost.
+                if HumanoidRootPart then
+                    local myP = HumanoidRootPart.Position
+                    local modelsU = collectAllPBModels()
+                    for i = 1, #modelsU do
+                        local mm = modelsU[i]
+                        if mm and mm.Parent and isPBTrueEnemy(mm, false, true) then
+                            local pp = getPBMobTargetPart(mm)
+                            if pp and (pp.Position - myP).Magnitude <= 150 then
+                                return
+                            end
+                        end
+                    end
+                end
                 pbCheckAndReplayDungeon(getPBRemotes())
             end)
         end
@@ -6564,8 +6664,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v8.5 | Pixel Blade [Room-Locked Gather + Real FPS Fix + Faster Swings]"
-    or "⚔️ Delta Hub v8.5 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v8.6 | Pixel Blade [Physics Load Cut + Unblocked Travel]"
+    or "⚔️ Delta Hub v8.6 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -6934,7 +7034,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v8.5 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v8.6 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -7571,4 +7671,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v8.5] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v8.6] Loaded! Active Game Detected: " .. tostring(CurrentGame))
