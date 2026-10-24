@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v8.1 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v8.3 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v8.1)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v8.3)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -2956,12 +2956,27 @@ local function pbBringAndExpandTargets()
     local activeFollowMob = State.PB_ActiveFollowMob
     local activeFollowPart = State.PB_ActiveFollowPart
 
-    -- Determine the exact gather point in front of the player's sword
+    -- v8.3 GATHER GEOMETRY FIX (user: «الوحوش تطيح من الماب… يمكن بسبب سحب الوحوش» — he was right). Every mob
+    -- used to be teleported onto the EXACT same CFrame. Roblox resolves the resulting overlap by ejecting the
+    -- whole pile at physics speed: with 8+ mobs stacked the separation impulse throws them out of the arena.
+    -- They are now placed on a 5x3 RING around the gather point (2.2 stud radius per slot) so bodies never
+    -- intersect, and the gather centre is 5.5 studs in front of the player instead of inside the target model.
     local gatherCF = HumanoidRootPart.CFrame * CFrame.new(0, 0, -5.5)
-    if isAutoFarming and activeFollowMob and activeFollowPart and activeFollowPart.Parent then
-        gatherCF = activeFollowPart.CFrame
-    end
     local gatherPos = gatherCF.Position
+    local gRight = gatherCF.RightVector
+    local gLook = gatherCF.LookVector
+    local gatherSlot = 0
+    local function slotCF(i)
+        -- 15 non-overlapping spots on two rings
+        if i <= 8 then
+            local ang = (i - 1) * (math.pi / 4)
+            local off = gRight * (math.cos(ang) * 2.6) + gLook * (math.sin(ang) * 2.6)
+            return CFrame.new(gatherPos + off)
+        end
+        local ang2 = (i - 9) * (math.pi / 3)
+        local off2 = gRight * (math.cos(ang2) * 4.8) + gLook * (math.sin(ang2) * 4.8)
+        return CFrame.new(gatherPos + off2)
+    end
 
     -- v7.9: only teleport mobs onto a real floor. Bring-mobs used to shove enemies onto the gather point even
     -- when it hung in mid-air at a ledge/edge of the arena — they dropped straight out of the world and vanished.
@@ -2999,19 +3014,37 @@ local function pbBringAndExpandTargets()
                             -- During Dungeon/Raid Auto-Farm: pull all OTHER active room enemies (hadEntrance == true) onto the primary target spot!
                             if gatherGrounded and v ~= activeFollowMob and not isBoss and (isRaid or hadEnt == true) then
                                 local distToGather = (eHrp.Position - gatherPos).Magnitude
-                                if distToGather > 1.5 and distToGather <= 85 then
+                                -- v8.3 requested range increase: 85 -> 160 studs (capped at 30 mobs per pass so
+                                -- one giant pile can never nuke the frame rate)
+                                if distToGather > 2.5 and distToGather <= 160 and gatherSlot < 30 then
+                                    gatherSlot = gatherSlot + 1
                                     eHrp.AssemblyLinearVelocity = Vector3.zero
                                     eHrp.AssemblyAngularVelocity = Vector3.zero
-                                    eHrp.CFrame = gatherCF
+                                    eHrp.CFrame = slotCF(((gatherSlot - 1) % 15) + 1)
+                                elseif distToGather <= 12 then
+                                    -- already gathered: clamp any physics explosion before it launches them away
+                                    local av = eHrp.AssemblyLinearVelocity
+                                    if av.Magnitude > 90 then
+                                        eHrp.AssemblyLinearVelocity = Vector3.zero
+                                        eHrp.AssemblyAngularVelocity = Vector3.zero
+                                    end
                                 end
                             end
                         else
-                            -- Manual mode with Bring Mobs ON: pull active enemies within 65 studs in front of player's sword
-                            if gatherGrounded and not isBoss and (isRaid or hadEnt == true or (eHrp.Position - HumanoidRootPart.Position).Magnitude <= 50) then
-                                if (eHrp.Position - HumanoidRootPart.Position).Magnitude <= 65 then
+                            -- v8.3 Manual mode: pull range 65 -> 120 studs, same ring placement (never stacked)
+                            if gatherGrounded and not isBoss and (isRaid or hadEnt == true or (eHrp.Position - HumanoidRootPart.Position).Magnitude <= 95) then
+                                local dMe = (eHrp.Position - gatherPos).Magnitude
+                                if dMe <= 120 and dMe > 2.5 and gatherSlot < 30 then
+                                    gatherSlot = gatherSlot + 1
                                     eHrp.AssemblyLinearVelocity = Vector3.zero
                                     eHrp.AssemblyAngularVelocity = Vector3.zero
-                                    eHrp.CFrame = gatherCF
+                                    eHrp.CFrame = slotCF(((gatherSlot - 1) % 15) + 1)
+                                elseif dMe <= 12 then
+                                    local av = eHrp.AssemblyLinearVelocity
+                                    if av.Magnitude > 90 then
+                                        eHrp.AssemblyLinearVelocity = Vector3.zero
+                                        eHrp.AssemblyAngularVelocity = Vector3.zero
+                                    end
                                 end
                             end
                         end
@@ -4589,6 +4622,126 @@ task.spawn(function()
     end
 end)
 
+-- v8.2 RAID TREE OBJECTIVE — REBUILT FROM USER SCREENSHOTS (the pink glowing raid tree was never picked up).
+-- v8.1 demanded a "marked" tree (prompt/billboard/light/objective word) and scored everything else to zero, so
+-- the plain pink tree in the raid got rejected and the bot never walked to it. Now:
+--   * ANY model/part whose name CONTAINS tree/sapling is a candidate — no score threshold at all (marked ones
+--     simply rank higher), mobs (models with a Humanoid) and "treant" enemies are excluded;
+--   * if no name matches, a NEON fallback finds the giant pink/purple glowing tree by colour + bulk, which is
+--     exactly what the raid tree looks like in the screenshots;
+--   * travelling is a single safe hop (raycasted floor, 8 studs off the trunk, never inside it) when the tree is
+--     far away, plus normal walking + jumps when it is close — so it always reaches it on mobile;
+--   * the tree we just reached is blacklisted for 40s, which is what makes "move to the NEXT tree" work.
+local function pbRaidTreeCandidate(inst)
+    if not inst or not (inst:IsA("BasePart") or inst:IsA("Model")) then return nil end
+    local nm = string.lower(tostring(inst.Name))
+    if string.find(nm, "treant", 1, true) then return nil end
+    local isModel = inst:IsA("Model")
+    if isModel and inst:FindFirstChildOfClass("Humanoid") then return nil end
+    local p
+    if isModel then
+        p = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+    else
+        p = inst
+    end
+    if not p or not p.Parent then return nil end
+    local named = string.find(nm, "tree", 1, true) or string.find(nm, "sapling", 1, true)
+    local score = named and 20 or 0
+    if named then
+        if inst:FindFirstChildWhichIsA("ProximityPrompt", true) or p:FindFirstChildWhichIsA("ProximityPrompt", true) then
+            score = score + 25
+        end
+        if inst:FindFirstChildWhichIsA("BillboardGui", true) then score = score + 15 end
+        if inst:FindFirstChildWhichIsA("Highlight", true) then score = score + 10 end
+        if p:FindFirstChildWhichIsA("PointLight", nil) or p:FindFirstChildWhichIsA("ParticleEmitter", nil)
+            or p:FindFirstChildWhichIsA("Beam", nil) then
+            score = score + 8
+        end
+    else
+        -- NEON PINK/PURPLE GIANT fallback (the raid tree on screen): needs bulk + several glowing parts.
+        local ok, glow, big = pcall(function()
+            local neons, tallest = 0, 0
+            for _, d in ipairs(inst:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    local c = d.Color
+                    local isPink = (c.R > 0.55 and c.B > 0.55 and c.G < 0.65) or (c.R > 0.75 and c.B > 0.75)
+                    if isPink and (d.Material == Enum.Material.Neon or d.Transparency < 0.4) then
+                        neons = neons + 1
+                    end
+                    if d.Size.Y > tallest then tallest = d.Size.Y end
+                end
+            end
+            return neons, tallest
+        end)
+        if not ok then return nil end
+        glow, big = (type(glow) == "number") and glow or 0, (type(big) == "number") and big or 0
+        if glow < 4 or big < 6 then return nil end
+        score = 8 + math.min(glow, 20)
+    end
+    if score <= 0 then return nil end
+    return p, score
+end
+
+local function pbFindRaidTree()
+    local now = tick()
+    local cache = State.PB_RaidTreeCache
+    if cache and (now - cache.t) < 2.0 then
+        if cache.part and cache.part.Parent then return cache.part end
+        return nil
+    end
+    local myPos = HumanoidRootPart and HumanoidRootPart.Position or Vector3.new(0, 0, 0)
+    local char = LocalPlayer and LocalPlayer.Character
+    local bl = State.PB_RaidTreeBlacklist
+    local best, bestScore, bestD = nil, 0, math.huge
+    local lookedAt = 0
+    local function consider(inst)
+        if not inst or inst == char then return end
+        if bl and bl[inst] and bl[inst] > now then return end
+        local p, score = pbRaidTreeCandidate(inst)
+        if not p then return end
+        local d = (p.Position - myPos).Magnitude
+        if d > 900 or p.Position.Y < (myPos.Y - 150) then return end
+        -- named trees win outright; the neon fallback is only used when nothing is named
+        if best and bestScore >= 20 and score < 20 then return end
+        if score > bestScore or (score == bestScore and d < bestD) then
+            best, bestScore, bestD = p, score, d
+        end
+    end
+    State.PB_RaidTreeScanCount = 0
+    for _, ch in ipairs(workspace:GetChildren()) do
+        consider(ch)
+        if ch:IsA("Model") or ch:IsA("Folder") then
+            for _, sub in ipairs(ch:GetChildren()) do
+                lookedAt = lookedAt + 1
+                if lookedAt <= 400 then consider(sub) end
+            end
+        end
+    end
+    State.PB_RaidTreeCache = { t = now, part = best }
+    return best
+end
+
+-- Safe standing spot beside a tree: 8 studs off the trunk, snapped to the nearest real floor below the canopy.
+local function pbRaidTreeSpot(treePart)
+    if not treePart or not treePart.Parent or not HumanoidRootPart then return nil end
+    local tp = treePart.Position
+    local my = HumanoidRootPart.Position
+    local dir = Vector3.new(my.X - tp.X, 0, my.Z - tp.Z)
+    if dir.Magnitude < 1 then dir = Vector3.new(0, 0, 1) end
+    dir = dir.Unit
+    local spot = tp + dir * 8
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    rp.FilterDescendantsInstances = { HumanoidRootPart.Parent }
+    local hit = workspace:Raycast(Vector3.new(spot.X, tp.Y + 30, spot.Z), Vector3.new(0, -140, 0), rp)
+    if hit then
+        spot = Vector3.new(spot.X, hit.Position.Y + 3.5, spot.Z)
+    else
+        spot = Vector3.new(spot.X, tp.Y + 3.5, spot.Z)
+    end
+    return spot, dir
+end
+
 -- 2F. Dedicated Pixel Blade Dungeon & Raid Auto Farm Movement & Step-by-Step Room Progression Loop (Proven v4.6 Room Transitions)
 task.spawn(function()
     while State.Running do
@@ -4628,6 +4781,18 @@ task.spawn(function()
 
                 if not inCutscene then
                     local mob, mobPart = findBestPBTarget(isRaid)
+                    -- v8.2 RAID PRIORITY: while the Tree objective is far away, do not let a distant mob hijack the
+                    -- player with a teleport chase — the raid driver must be free to reach the tree first.
+                    if isRaid and mob and mobPart and pbFindRaidTree then
+                        local tpC = pbFindRaidTree()
+                        if tpC and tpC.Parent then
+                            local dT = (tpC.Position - HumanoidRootPart.Position).Magnitude
+                            local dM = (mobPart.Position - HumanoidRootPart.Position).Magnitude
+                            if dT > 12 and dM > 95 then
+                                mob, mobPart = nil, nil
+                            end
+                        end
+                    end
                     if mob and mobPart then
                         State.PB_ZeroEnemySinceTick = nil
                         -- v7.1: the ONE model combat is currently fighting (the stale watch judges ONLY this)
@@ -4926,76 +5091,6 @@ task.spawn(function()
     end
 end)
 
--- v8.1 RAID TREE OBJECTIVE (user screenshots: «Move to the Tree 0/1» / «Move to the next Tree 0/1» — the raid
--- gates every wave behind walking to a tree, and the tree relocates every few waves). The auto raid now walks
--- there by itself. A tree only counts when it is a MARKED objective (interactive prompt / billboard / highlight /
--- light / beam) or carries an objective word in its name — plain map-decoration trees can never drag the bot.
-local function pbRaidTreeCandidate(inst)
-    if not inst or not (inst:IsA("BasePart") or inst:IsA("Model")) then return nil end
-    local nm = string.lower(tostring(inst.Name))
-    if not (string.find(nm, "tree", 1, true) or string.find(nm, "sapling", 1, true)) then return nil end
-    local p
-    if inst:IsA("BasePart") then
-        p = inst
-    else
-        p = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
-    end
-    if not p then return nil end
-    local score = 0
-    if inst:FindFirstChildWhichIsA("ProximityPrompt", true) or p:FindFirstChildWhichIsA("ProximityPrompt", true) then
-        score = score + 25
-    end
-    if inst:FindFirstChildWhichIsA("BillboardGui", true) then score = score + 15 end
-    if inst:FindFirstChildWhichIsA("Highlight", true) then score = score + 10 end
-    if p:FindFirstChildWhichIsA("PointLight", nil) or p:FindFirstChildWhichIsA("ParticleEmitter", nil)
-        or p:FindFirstChildWhichIsA("Beam", nil) then
-        score = score + 8
-    end
-    local words = { "raid", "ghost", "soul", "spirit", "objective", "quest", "haunt", "void", "event", "corrupt" }
-    for _w = 1, #words do
-        if string.find(nm, words[_w], 1, true) then
-            score = score + 12
-            break
-        end
-    end
-    if score < 10 then return nil end
-    return p, score
-end
-
-local function pbFindRaidTree()
-    local now = tick()
-    local cache = State.PB_RaidTreeCache
-    if cache and (now - cache.t) < 2.0 then
-        if cache.part and cache.part.Parent then return cache.part end
-        return nil
-    end
-    local myPos = HumanoidRootPart and HumanoidRootPart.Position or Vector3.new(0, 0, 0)
-    local char = LocalPlayer and LocalPlayer.Character
-    local bl = State.PB_RaidTreeBlacklist
-    local best, bestScore, bestD = nil, 0, math.huge
-    local function consider(inst)
-        if not inst or inst == char then return end
-        if bl and bl[inst] and bl[inst] > now then return end
-        local p, score = pbRaidTreeCandidate(inst)
-        if not p then return end
-        local d = (p.Position - myPos).Magnitude
-        if d > 600 or p.Position.Y < (myPos.Y - 80) then return end
-        if score > bestScore or (score == bestScore and d < bestD) then
-            best, bestScore, bestD = p, score, d
-        end
-    end
-    for _, ch in ipairs(workspace:GetChildren()) do
-        consider(ch)
-        if ch:IsA("Model") or ch:IsA("Folder") then
-            for _, sub in ipairs(ch:GetChildren()) do
-                consider(sub)
-            end
-        end
-    end
-    State.PB_RaidTreeCache = { t = now, part = best }
-    return best
-end
-
 -- 2H. v8.0 REAL AUTO RAID DRIVER (user: «ابغى اضيف الرايد التلقائي»). Pixel Blade raids are wave arenas that
 -- are advanced ONLY by remotes.StartRaid:FireServer() — no arguments, the exact call every community raid
 -- script uses. The old toggle farmed whatever was already standing in front of the player and then went silent
@@ -5019,51 +5114,80 @@ task.spawn(function()
             if cutscene and cutscene.Value == true then return end
             if State.PB_UpgradePopupOpen then return end
             local now = tick()
-            local busy = State.PB_AttackFocus and State.PB_AttackFocus.Parent
-                and (now - (State.PB_AttackFocusTick or 0)) < 1.2
+            local busy = false
+            if State.PB_AttackFocus and State.PB_AttackFocus.Parent
+                and (now - (State.PB_AttackFocusTick or 0)) < 1.2 then
+                local fP = getPBMobTargetPart(State.PB_AttackFocus)
+                -- v8.2: only a mob we can actually reach counts as busy; a raid-wide distant enemy must not
+                -- freeze the Tree objective walk (that is why the bot stood still instead of moving to the tree)
+                busy = fP ~= nil and (fP.Position - HumanoidRootPart.Position).Magnitude <= 90
+            end
             if busy then
                 State.PB_RaidMisses = 0
                 State.PB_RaidWalkUntil = nil
                 State.PB_RaidTreeTarget = nil
             end
-            -- v8.1: while nothing is alive, walk to the current "Tree" objective (it moves every few waves).
+            -- v8.2: while nothing is being fought, reach the current "Tree" objective (it moves every few waves).
             local treeHold = false
             if not busy then
                 local treePart = pbFindRaidTree()
+                local dTree = (treePart and treePart.Parent) and (treePart.Position - HumanoidRootPart.Position).Magnitude or math.huge
                 if treePart and treePart.Parent then
-                    local dTree = (treePart.Position - HumanoidRootPart.Position).Magnitude
-                    if dTree > 6.5 then
-                        -- safety: never chase one tree for more than 22s (decoy/decor) -> drop it for 90s
-                        if State.PB_RaidTreeTarget ~= treePart then
-                            State.PB_RaidTreeTarget = treePart
-                            State.PB_RaidTreeSince = now
-                        elseif (now - (State.PB_RaidTreeSince or now)) > 22.0 then
-                            State.PB_RaidTreeBlacklist = State.PB_RaidTreeBlacklist or setmetatable({}, { __mode = "k" })
-                            State.PB_RaidTreeBlacklist[treePart] = now + 90
-                            State.PB_RaidTreeTarget = nil
-                            State.PB_RaidTreeCache = nil
-                            treePart = nil
-                        end
+                    -- safety: never chase one tree for more than 25s -> drop it for 90s
+                    if State.PB_RaidTreeTarget ~= treePart then
+                        State.PB_RaidTreeTarget = treePart
+                        State.PB_RaidTreeSince = now
+                        State.PB_RaidTreeHopped = nil
+                    elseif (now - (State.PB_RaidTreeSince or now)) > 25.0 then
+                        State.PB_RaidTreeBlacklist = State.PB_RaidTreeBlacklist or setmetatable({}, { __mode = "k" })
+                        State.PB_RaidTreeBlacklist[treePart] = now + 90
+                        State.PB_RaidTreeTarget = nil
+                        State.PB_RaidTreeHopped = nil
+                        State.PB_RaidTreeCache = nil
+                        treePart = nil
                     end
-                    if treePart then
-                        if dTree > 6.5 then
-                            treeHold = true
-                            Humanoid:MoveTo(treePart.Position)
-                            if (now - (State.PB_RaidJumpAt or 0)) >= 0.9 then
+                end
+                if treePart and treePart.Parent then
+                    if dTree > 9.0 then
+                        treeHold = true
+                        if dTree > 45 then
+                            -- one safe hop per tree (raycasted floor, 8 studs off the trunk) — walking 300 studs
+                            -- across raid terrain on mobile simply never finished
+                            if State.PB_RaidTreeHopped ~= treePart then
+                                local spot = pbRaidTreeSpot(treePart)
+                                if spot then
+                                    State.PB_RaidTreeHopped = treePart
+                                    pcall(function()
+                                        HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+                                        HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
+                                        HumanoidRootPart.CFrame = CFrame.lookAt(spot, Vector3.new(treePart.Position.X, spot.Y, treePart.Position.Z))
+                                    end)
+                                end
+                            end
+                        else
+                            local spot = pbRaidTreeSpot(treePart)
+                            if spot then Humanoid:MoveTo(spot) end
+                            if (now - (State.PB_RaidJumpAt or 0)) >= 0.7 then
                                 State.PB_RaidJumpAt = now
                                 Humanoid.Jump = true
                             end
-                            State.PB_DungeonStatusText = string.format("🌳 التوجه إلى الشجرة (%dم)...", math.floor(dTree))
-                        else
-                            State.PB_RaidTreeTarget = nil
-                            -- press whatever prompt the tree carries (executor helper, fully pcall-guarded)
-                            local prompt = treePart:FindFirstChildWhichIsA("ProximityPrompt", nil)
-                                or treePart:FindFirstChildWhichIsA("ProximityPrompt", true)
-                            if prompt and prompt.Enabled then
-                                pcall(function() fireproximityprompt(prompt) end)
-                            end
-                            State.PB_DungeonStatusText = "🌳 وصلنا الشجرة — جاري فتح الموجة..."
                         end
+                        local tName = tostring(treePart.Name)
+                        if #tName > 22 then tName = string.sub(tName, 1, 22) end
+                        State.PB_DungeonStatusText = string.format("🌳 التوجه إلى %s (%dم)...", tName, math.floor(dTree))
+                    else
+                        State.PB_RaidTreeTarget = nil
+                        State.PB_RaidTreeHopped = nil
+                        -- blacklist the tree we just reached so "move to the NEXT tree" immediately retargets
+                        State.PB_RaidTreeBlacklist = State.PB_RaidTreeBlacklist or setmetatable({}, { __mode = "k" })
+                        State.PB_RaidTreeBlacklist[treePart] = now + 40
+                        State.PB_RaidTreeCache = nil
+                        local prompt = treePart:FindFirstChildWhichIsA("ProximityPrompt", nil)
+                            or treePart:FindFirstChildWhichIsA("ProximityPrompt", true)
+                        if prompt and prompt.Enabled then
+                            pcall(function() fireproximityprompt(prompt) end)
+                        end
+                        State.PB_DungeonStatusText = "🌳 وصلنا الشجرة — جاري فتح الموجة..."
                     end
                 end
             end
@@ -6082,8 +6206,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v8.1 | Pixel Blade [Raid Tree Objectives + No Falling Bosses]"
-    or "⚔️ Delta Hub v8.1 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v8.3 | Pixel Blade [Raid Tree Works + Safe Bring-Mobs Ring]"
+    or "⚔️ Delta Hub v8.3 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -6452,7 +6576,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v8.1 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v8.3 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -7084,4 +7208,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v8.1] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v8.3] Loaded! Active Game Detected: " .. tostring(CurrentGame))
