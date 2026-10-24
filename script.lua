@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v8.4 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v8.5 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v8.4)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v8.5)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -2438,12 +2438,19 @@ local function pbProtectPlayerFromMonsters()
                 if dist <= 75 and (hadEnt == true or Config.PB_AutoFarmRaid or dist <= 35) then
                     local eHum = v:FindFirstChildOfClass("Humanoid") or v:FindFirstChild("Humanoid")
                     if eHum and eHum.Health > 0 then
-                        -- Freeze monster walk speed so it cannot chase/touch the player
-                        pcall(function()
-                            if eHum.WalkSpeed > 0 then
+                        -- v8.5: freeze monster walk speed ONCE per mob per 2s. Writing WalkSpeed on every mob every
+                        -- 0.35s replicated dozens of property changes per second and was a major lag source.
+                        local wsMap = State.PB_WalkFreezeAt
+                        if not wsMap then
+                            wsMap = setmetatable({}, { __mode = "k" })
+                            State.PB_WalkFreezeAt = wsMap
+                        end
+                        if (wsMap[v] or 0) < tick() and eHum.WalkSpeed > 0 then
+                            wsMap[v] = tick() + 2.0
+                            pcall(function()
                                 eHum.WalkSpeed = 0
-                            end
-                        end)
+                            end)
+                        end
                         -- Server-side 999s stun (Zero-Lag: no tornado! + max ONE fire per mob per 6s = no spam!)
                         if abilityHit and stunnedCount < 6 and pbShouldSendStun(v) then
                             stunnedCount = stunnedCount + 1
@@ -2546,13 +2553,12 @@ local function pbPerformRealM1Attack()
     -- Auto-Clicker toggle is off (remote damage is discarded on validated servers, so taps are the only killer).
     if not (Config.PB_AutoClicker or State.PB_RaidSwing) then return end
     local now = tick()
-    -- v6.5 watchdog: PB_M1ClickInFlight used to be able to stay true forever if the release thread died
-    -- (that was the "auto-clicker hangs after the pick" report) -> stale flag expires after just 0.35s (v6.7:
-    -- 1.5s was itself wasting ~12 attacks per dropped release).
-    if State.PB_M1ClickInFlight and (now - (State.PB_M1InFlightSince or 0)) >= 0.35 then
+    -- v8.5 FASTER SWINGS (user: «احس ان الضرب شوي بطيء»): 0.12s gate -> 0.085s, and the in-flight watchdog was
+    -- shortened so one slow release can never eat three swings.
+    if State.PB_M1ClickInFlight and (now - (State.PB_M1InFlightSince or 0)) >= 0.22 then
         State.PB_M1ClickInFlight = false
     end
-    if (now - (State.PB_LastM1Time or 0)) < 0.12 or State.PB_M1ClickInFlight then return end
+    if (now - (State.PB_LastM1Time or 0)) < 0.085 or State.PB_M1ClickInFlight then return end
     State.PB_LastM1Time = now
 
     pcall(function()
@@ -2598,7 +2604,7 @@ local function pbPerformRealM1Attack()
                     if jumpBtn and jumpBtn.Parent and isGuiVisible(jumpBtn) and grounded then
                         local jx, jy = pbScreenPointFor(jumpBtn, true)
                         VirtualInputManager:SendMouseButtonEvent(jx, jy, 0, true, game, 1)
-                        task.wait(0.01)
+                        task.wait(0.006)
                         VirtualInputManager:SendMouseButtonEvent(jx, jy, 0, false, game, 1)
                     end
 
@@ -2628,15 +2634,16 @@ local function pbPerformRealM1Attack()
 
                     if not coveredByHub then
                         VirtualInputManager:SendMouseButtonEvent(sx, syTap, 0, true, game, 1)
-                        task.wait(0.02)
+                        task.wait(0.012)
                         VirtualInputManager:SendMouseButtonEvent(sx, syTap, 0, false, game, 1)
                     end
                     -- v6.7: release jump flag after the swing press so the NEXT swing re-jumps (never held true)
                     if Humanoid then
                         Humanoid.Jump = false
                     end
-                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                    -- v8.5: the legacy SendMouseButtonEvent(0,0,...,game,0) pair is REMOVED. It fired an extra
+                    -- synthetic click into the top-left corner on every swing (wasted input + extra event traffic).
+
                 end)
                 State.PB_M1ClickInFlight = false
             end)
@@ -2997,6 +3004,18 @@ local function pbDungeonObjectiveTravel()
         return true
     end
 
+    -- v8.5: a living BOSS is never abandoned — walking away from it into another room is exactly what wedged the
+    -- run before (the boss follows, its room never registers as cleared).
+    do
+        local listB = collectAllPBModels()
+        for i = 1, #listB do
+            local b = listB[i]
+            if b and b.Parent and isPBMobAlive(b) then
+                local isBossB = PB_BOSS_NAMES[b.Name] == true or b:FindFirstChild("worm") ~= nil or b.Name == "BookHand"
+                if isBossB then return false end
+            end
+        end
+    end
     local target = State.PB_ExitTarget
     local prompt = State.PB_ExitPrompt
     if not (target and target.Parent) then
@@ -3199,6 +3218,10 @@ local function pbBringAndExpandTargets()
     local gatherPos = gatherCF.Position
     local gRight = gatherCF.RightVector
     local gLook = gatherCF.LookVector
+    -- v8.5 ROOM LOCK (user: «طلع اللاعب يسحب الزعيم من غرفته لغرفة أخرى لذا يعلق» — exactly right). The v8.3
+    -- range (160) reached ACROSS room boundaries and teleported mobs out of their own room, which leaves the
+    -- dungeon (and the boss) in an impossible state. Gathering is now anchored to the room we are actually
+    -- fighting in: mobs further than PB ROOM_RADIUS from the CURRENT TARGET are never teleported.
     local gatherSlot = 0   -- slot assignment counter (max 15 distinct spots)
     local gatherMoved = 0  -- teleports actually issued in this pass (hard frame guard)
     local function slotCF(i)
@@ -3254,7 +3277,10 @@ local function pbBringAndExpandTargets()
                                 -- writes + physics separations per second = 4-6 FPS. Each mob now keeps a STABLE
                                 -- slot (weak map) and is only teleported when it drifted > 7 studs from it, with a
                                 -- hard cap of 12 teleports per pass. Range stays 160 as requested.
-                                if distToGather > 2.5 and distToGather <= 160 then
+                                -- room-locked: distance is measured from the ACTIVE TARGET (same room cluster)
+                                local anchor = activeFollowPart and activeFollowPart.Parent and activeFollowPart.Position or gatherPos
+                                local dAnchor = (eHrp.Position - anchor).Magnitude
+                                if distToGather > 2.5 and dAnchor <= 60 and distToGather <= 160 then
                                     local slotMap = State.PB_GatherSlotMap
                                     if not slotMap then
                                         slotMap = setmetatable({}, { __mode = "k" })
@@ -3287,7 +3313,7 @@ local function pbBringAndExpandTargets()
                             -- v8.3 Manual mode: pull range 65 -> 120 studs, same ring placement (never stacked)
                             if gatherGrounded and not isBoss and (isRaid or hadEnt == true or (eHrp.Position - HumanoidRootPart.Position).Magnitude <= 95) then
                                 local dMe = (eHrp.Position - gatherPos).Magnitude
-                                if dMe <= 120 and dMe > 2.5 then
+                                if dMe <= 60 and dMe > 2.5 then
                                     local slotMap = State.PB_GatherSlotMap
                                     if not slotMap then
                                         slotMap = setmetatable({}, { __mode = "k" })
@@ -4796,29 +4822,36 @@ end)
 -- (Blur/Bloom/SunRays/Atmosphere) ويحط جودة التكس처 على الأدنى ويفتح حد الفريمات (PC فقط).
 -- تأثيرات رسومية محلية 100% — لا تمس القتال أو السيرفر ولا تسبب أي لاق. تعاد كل 12 ثانية لو رجعتها اللعبة.
 local function pbApplyFpsBoost()
+    -- v8.5 REAL FPS FIX (user: «الفريمات ما انحلت»): the old version re-applied FOUR expensive engine-wide calls
+    -- every 12 seconds — TerrainQuality rebuilds terrain LODs, SetTextureQualityLevel forces a full texture reload,
+    -- Set3dResolutionScaleEnabled re-allocates the render target, settings().Rendering writes the settings file.
+    -- Doing that on a mobile client produced a guaranteed hitch every 12s and looked like "low FPS". Now the heavy
+    -- ones run ONCE (guarded by pcall + a flag) and only the two cheap property writes repeat.
     pcall(function()
         Lighting.GlobalShadows = false
     end)
     pcall(function()
         for _, fx in ipairs(Lighting:GetChildren()) do
             if fx:IsA("PostEffect") or fx:IsA("BaseEffect") then
-                fx.Enabled = false
+                if fx.Enabled then fx.Enabled = false end
             end
         end
     end)
-    pcall(function()
-        workspace.TerrainQuality = Enum.TerrainQuality.PerformanceLow
-    end)
-    pcall(function()
-        game:GetService("ContentProvider"):SetTextureQualityLevel(0, false)
-    end)
-    pcall(function()
-        settings().Rendering.EnableFRM = true
-    end)
-    pcall(function()
-        -- تشغيل التحجيم التلقائي للدقة: خفظ الـ FPS على الموبايل (Roblox يخفض الدقة بدل التقطيع)
-        game:GetService("RunService"):Set3dResolutionScaleEnabled(true)
-    end)
+    if not State.PB_HeavyBoostDone then
+        State.PB_HeavyBoostDone = true
+        pcall(function()
+            workspace.TerrainQuality = Enum.TerrainQuality.PerformanceLow
+        end)
+        pcall(function()
+            game:GetService("ContentProvider"):SetTextureQualityLevel(0, false)
+        end)
+        pcall(function()
+            settings().Rendering.EnableFRM = true
+        end)
+        pcall(function()
+            game:GetService("RunService"):Set3dResolutionScaleEnabled(true)
+        end)
+    end
 end
 task.spawn(function()
     pbApplyFpsBoost()
@@ -5045,7 +5078,8 @@ end
 -- 2F. Dedicated Pixel Blade Dungeon & Raid Auto Farm Movement & Step-by-Step Room Progression Loop (Proven v4.6 Room Transitions)
 task.spawn(function()
     while State.Running do
-        task.wait(0.15)
+        -- v8.5: 0.15s normally, 0.26s on a struggling device (the farm scan is the heaviest per-tick work)
+        task.wait(((State.PB_FpsAvg or 60) < 22) and 0.26 or 0.15)
         pcall(function()
             refreshCharacterRefs()
 
@@ -5080,7 +5114,19 @@ task.spawn(function()
                 local inCutscene = cutscene and cutscene.Value == true
 
                 if not inCutscene then
-                    local mob, mobPart = findBestPBTarget(isRaid)
+                    -- v8.5 CPU FIX: findBestPBTarget walks every model in workspace. It ran 6-7x/second even when
+                    -- a perfectly good target was already locked. The locked target is now reused for 0.35s
+                    -- (still re-validated: alive, parented, same room) so the heavy scan drops to ~3x/second.
+                    local mob, mobPart
+                    local tc = State.PB_TargetCache
+                    if tc and tc.mob and tc.mob.Parent and tc.part and tc.part.Parent
+                        and (tick() - (tc.t or 0)) < 0.35
+                        and (tc.part.Position - HumanoidRootPart.Position).Magnitude <= 140 then
+                        mob, mobPart = tc.mob, tc.part
+                    else
+                        mob, mobPart = findBestPBTarget(isRaid)
+                        State.PB_TargetCache = { mob = mob, part = mobPart, t = tick() }
+                    end
                     -- v8.2 RAID PRIORITY: while the Tree objective is far away, do not let a distant mob hijack the
                     -- player with a teleport chase — the raid driver must be free to reach the tree first.
                     if isRaid and mob and mobPart and pbFindRaidTree then
@@ -5382,7 +5428,8 @@ end
 -- 2G. Dedicated Independent Auto-Clicker Loop (Runs 100% independently whether Dungeon Auto-Farm is ON or OFF!)
 task.spawn(function()
     while State.Running do
-        task.wait(0.12)
+        -- v8.5: 0.12s -> 0.07s tick (the M1 engine itself gates the real swing rate at 0.085s)
+        task.wait(0.07)
         pcall(function()
             if Config.PB_AutoClicker and HumanoidRootPart and not State.PB_UpgradePopupOpen then
                 local cutscene = workspace:FindFirstChild("inCutscene")
@@ -6517,8 +6564,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v8.4 | Pixel Blade [W5 Room Travel + Adaptive FPS Guard]"
-    or "⚔️ Delta Hub v8.4 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v8.5 | Pixel Blade [Room-Locked Gather + Real FPS Fix + Faster Swings]"
+    or "⚔️ Delta Hub v8.5 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -6887,7 +6934,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v8.4 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v8.5 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -7524,4 +7571,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v8.4] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v8.5] Loaded! Active Game Detected: " .. tostring(CurrentGame))
