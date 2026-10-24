@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v8.0 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v8.1 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v8.0)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v8.1)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -1676,14 +1676,17 @@ local function pbHitPillarModel(v)
     local dmg = currentPBWeaponDamage()
 
     pcall(function()
+        -- v8.1 ANTI-LAUNCH: 1e30 / 9999999999 payloads are gone. Roblox games scale knockback with the damage
+        -- number, and an absurd hit literally flings monsters (bosses first) out of the map, where they vanish.
+        -- We now send the REAL weapon damage, twice when the pillar is already cracking, and the actual sword
+        -- swings do the killing on validated servers anyway.
         if prev and cur < prev then
-            -- Pillar already cracking -> finish it instantly (exact Mana-scripts crate pattern)
-            onHit:FireServer(target, -1e30, {}, 0)
+            onHit:FireServer(target, dmg, {}, 0)
+            onHit:FireServer(target, dmg, {}, 0)
             if hum and hum ~= target then
-                onHit:FireServer(hum, -1e30, {}, 0)
+                onHit:FireServer(hum, dmg, {}, 0)
             end
         else
-            onHit:FireServer(target, 9999999999, {}, 0)
             onHit:FireServer(target, dmg, {}, 0)
         end
     end)
@@ -2036,11 +2039,11 @@ local function findBestPBTarget(isRaid)
         if v and v.Parent and isPBTrueEnemy(v, isRaid, false) then
             local part = getPBMobTargetPart(v)
             if part then
-                -- Never anchor NPC HumanoidRootPart on client so client position == server position!
+                -- v8.1 BOSS-FALL FIX (user: «البوس يطيح من الماب ويختفي ما انحلت»): NEVER unanchor an NPC root
+                -- on the client. Clearing Anchored hands that assembly to CLIENT physics; a boss spawned over a
+                -- missing/removed floor collider instantly free-falls out of the world and "disappears". Anchored
+                -- monsters are simply left exactly as the server owns them.
                 local eHrp = v:FindFirstChild("HumanoidRootPart")
-                if eHrp and eHrp:IsA("BasePart") and eHrp.Anchored then
-                    pcall(function() eHrp.Anchored = false end)
-                end
 
                 local mobPos = part.Position
                 local distFromMe = (mobPos - myPos).Magnitude
@@ -2298,7 +2301,7 @@ local function pbBreakAllBreakablesRemotely()
                         if prevHP and curHP >= prevHP then
                             onHit:FireServer(hum, wpnDmg, {}, 0)
                         else
-                            onHit:FireServer(hum, -1e30, {}, 0)
+                            onHit:FireServer(hum, wpnDmg, {}, 0)
                         end
                     end)
                     count = count + 1
@@ -2445,7 +2448,7 @@ local function pbProtectPlayerFromMonsters()
                         if abilityHit and stunnedCount < 6 and pbShouldSendStun(v) then
                             stunnedCount = stunnedCount + 1
                             pcall(function()
-                                abilityHit:FireServer(eHum, 1e30, { ["stun"] = { ["dur"] = 999 } })
+                                abilityHit:FireServer(eHum, currentPBWeaponDamage(), { ["stun"] = { ["dur"] = 999 } })
                             end)
                         end
                     end
@@ -2536,6 +2539,8 @@ end
 -- Uses ONLY Roblox's native VirtualInputManager:SendMouseButtonEvent + Humanoid.Jump!
 local function pbPerformRealM1Attack()
     if tick() < (State.PB_QuietUntil or 0) then return end -- v6.3 post-pick quiet: no server sends right after a level-up pick
+    -- v8.1: never swing while the raid driver is walking to a Tree objective (a click into empty air is a wasted attack)
+    if tick() < (State.PB_RaidWalkUntil or 0) then return end
 
     -- v8.0: State.PB_RaidSwing lets the Auto Raid driver perform the very same real sword taps when the
     -- Auto-Clicker toggle is off (remote damage is discarded on validated servers, so taps are the only killer).
@@ -2676,13 +2681,12 @@ local function pbDamageModel(v, wpnDmg)
             swing:FireServer()
         end
         if onHit and targetObj then
-            onHit:FireServer(targetObj, 9999999999, {}, 0)
             onHit:FireServer(targetObj, dmgVal, {}, 0)
         end
         -- 2. Zero-Lag 999s Stun + Instant Damage on primary target (abilityHit WITHOUT useAbility("tornado") so 0 lag!)
         --    Throttled: re-send max once per 6s per mob (dur = 999s) — no packet spam while grinding the Boss!
         if abilityHit and hum and hum.Health > 0 and pbShouldSendStun(v) then
-            abilityHit:FireServer(hum, 1e30, { ["stun"] = { ["dur"] = 999 } })
+            abilityHit:FireServer(hum, dmgVal, { ["stun"] = { ["dur"] = 999 } })
         end
         if useAbility and (v.Name == "Maneater" or v:FindFirstChild("worm")) then
             useAbility:FireServer("lunarSpell")
@@ -2705,11 +2709,10 @@ local function pbDamageModel(v, wpnDmg)
                             local oHum = other:FindFirstChildOfClass("Humanoid") or other:FindFirstChild("Humanoid")
                             if oHum and oHum.Health > 0 then
                                 if onHit then
-                                    onHit:FireServer(oHum, 9999999999, {}, 0)
                                     onHit:FireServer(oHum, dmgVal, {}, 0)
                                 end
                                 if abilityHit and pbShouldSendStun(other) then
-                                    abilityHit:FireServer(oHum, 1e30, { ["stun"] = { ["dur"] = 999 } })
+                                    abilityHit:FireServer(oHum, dmgVal, { ["stun"] = { ["dur"] = 999 } })
                                 end
                                 extraHits = extraHits + 1
                                 if extraHits >= 5 then break end
@@ -2983,11 +2986,11 @@ local function pbBringAndExpandTargets()
                 if not isFalling and (Config.PB_ExpandHitbox or isAutoFarming or Config.PB_KillAura or Config.PB_BringMobs) then
                     pbExpandHitboxesFor(v, sz)
                 end
+                if eHrp and eHrp:IsA("BasePart") and eHrp.Anchored then
+                    -- v8.1: a server-anchored model is left untouched (never hand a boss to client physics).
+                    return
+                end
                 if eHrp and eHrp:IsA("BasePart") then
-                    -- Never anchor eHrp on client (client-side Anchored freezes NPC at spawn and desyncs server hits!)
-                    if eHrp.Anchored then
-                        eHrp.Anchored = false
-                    end
 
                     if Config.PB_BringMobs then
                         local hadEnt = v:GetAttribute("hadEntrance")
@@ -4630,6 +4633,21 @@ task.spawn(function()
                         -- v7.1: the ONE model combat is currently fighting (the stale watch judges ONLY this)
                         State.PB_AttackFocus = mob
                         State.PB_AttackFocusTick = tick()
+                        -- v8.1 BOSS-FALL RECOVERY: if the model we are fighting is far BELOW us (already out of
+                        -- the world), lift it back to our own floor level once (harmless local nudge when the
+                        -- server owns it, a real rescue when the client does) and stop chasing it for 20s.
+                        local fRoot = mob:FindFirstChild("HumanoidRootPart")
+                        if fRoot and fRoot:IsA("BasePart") and (fRoot.Position.Y < (HumanoidRootPart.Position.Y - 45)) then
+                            pcall(function()
+                                local lift = HumanoidRootPart.Position + (HumanoidRootPart.CFrame.LookVector * 8)
+                                fRoot.CFrame = CFrame.new(lift.X, HumanoidRootPart.Position.Y + 3, lift.Z)
+                                fRoot.AssemblyLinearVelocity = Vector3.zero
+                            end)
+                            State.PB_LockedMobIgnoreUntil = State.PB_LockedMobIgnoreUntil or setmetatable({}, { __mode = "k" })
+                            State.PB_LockedMobIgnoreUntil[mob] = tick() + 20
+                            State.PB_DungeonStatusText = "🛟 البوس كان طايح خارج الماب — جاري رفعه وتجاهله 20ث..."
+                            return
+                        end
                         local dist = math.floor((mobPart.Position - HumanoidRootPart.Position).Magnitude)
                         local hp = math.floor(getPBMobCurrentHP(mob))
                         local hadEnt = mob:GetAttribute("hadEntrance")
@@ -4908,6 +4926,76 @@ task.spawn(function()
     end
 end)
 
+-- v8.1 RAID TREE OBJECTIVE (user screenshots: «Move to the Tree 0/1» / «Move to the next Tree 0/1» — the raid
+-- gates every wave behind walking to a tree, and the tree relocates every few waves). The auto raid now walks
+-- there by itself. A tree only counts when it is a MARKED objective (interactive prompt / billboard / highlight /
+-- light / beam) or carries an objective word in its name — plain map-decoration trees can never drag the bot.
+local function pbRaidTreeCandidate(inst)
+    if not inst or not (inst:IsA("BasePart") or inst:IsA("Model")) then return nil end
+    local nm = string.lower(tostring(inst.Name))
+    if not (string.find(nm, "tree", 1, true) or string.find(nm, "sapling", 1, true)) then return nil end
+    local p
+    if inst:IsA("BasePart") then
+        p = inst
+    else
+        p = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+    end
+    if not p then return nil end
+    local score = 0
+    if inst:FindFirstChildWhichIsA("ProximityPrompt", true) or p:FindFirstChildWhichIsA("ProximityPrompt", true) then
+        score = score + 25
+    end
+    if inst:FindFirstChildWhichIsA("BillboardGui", true) then score = score + 15 end
+    if inst:FindFirstChildWhichIsA("Highlight", true) then score = score + 10 end
+    if p:FindFirstChildWhichIsA("PointLight", nil) or p:FindFirstChildWhichIsA("ParticleEmitter", nil)
+        or p:FindFirstChildWhichIsA("Beam", nil) then
+        score = score + 8
+    end
+    local words = { "raid", "ghost", "soul", "spirit", "objective", "quest", "haunt", "void", "event", "corrupt" }
+    for _w = 1, #words do
+        if string.find(nm, words[_w], 1, true) then
+            score = score + 12
+            break
+        end
+    end
+    if score < 10 then return nil end
+    return p, score
+end
+
+local function pbFindRaidTree()
+    local now = tick()
+    local cache = State.PB_RaidTreeCache
+    if cache and (now - cache.t) < 2.0 then
+        if cache.part and cache.part.Parent then return cache.part end
+        return nil
+    end
+    local myPos = HumanoidRootPart and HumanoidRootPart.Position or Vector3.new(0, 0, 0)
+    local char = LocalPlayer and LocalPlayer.Character
+    local bl = State.PB_RaidTreeBlacklist
+    local best, bestScore, bestD = nil, 0, math.huge
+    local function consider(inst)
+        if not inst or inst == char then return end
+        if bl and bl[inst] and bl[inst] > now then return end
+        local p, score = pbRaidTreeCandidate(inst)
+        if not p then return end
+        local d = (p.Position - myPos).Magnitude
+        if d > 600 or p.Position.Y < (myPos.Y - 80) then return end
+        if score > bestScore or (score == bestScore and d < bestD) then
+            best, bestScore, bestD = p, score, d
+        end
+    end
+    for _, ch in ipairs(workspace:GetChildren()) do
+        consider(ch)
+        if ch:IsA("Model") or ch:IsA("Folder") then
+            for _, sub in ipairs(ch:GetChildren()) do
+                consider(sub)
+            end
+        end
+    end
+    State.PB_RaidTreeCache = { t = now, part = best }
+    return best
+end
+
 -- 2H. v8.0 REAL AUTO RAID DRIVER (user: «ابغى اضيف الرايد التلقائي»). Pixel Blade raids are wave arenas that
 -- are advanced ONLY by remotes.StartRaid:FireServer() — no arguments, the exact call every community raid
 -- script uses. The old toggle farmed whatever was already standing in front of the player and then went silent
@@ -4935,6 +5023,55 @@ task.spawn(function()
                 and (now - (State.PB_AttackFocusTick or 0)) < 1.2
             if busy then
                 State.PB_RaidMisses = 0
+                State.PB_RaidWalkUntil = nil
+                State.PB_RaidTreeTarget = nil
+            end
+            -- v8.1: while nothing is alive, walk to the current "Tree" objective (it moves every few waves).
+            local treeHold = false
+            if not busy then
+                local treePart = pbFindRaidTree()
+                if treePart and treePart.Parent then
+                    local dTree = (treePart.Position - HumanoidRootPart.Position).Magnitude
+                    if dTree > 6.5 then
+                        -- safety: never chase one tree for more than 22s (decoy/decor) -> drop it for 90s
+                        if State.PB_RaidTreeTarget ~= treePart then
+                            State.PB_RaidTreeTarget = treePart
+                            State.PB_RaidTreeSince = now
+                        elseif (now - (State.PB_RaidTreeSince or now)) > 22.0 then
+                            State.PB_RaidTreeBlacklist = State.PB_RaidTreeBlacklist or setmetatable({}, { __mode = "k" })
+                            State.PB_RaidTreeBlacklist[treePart] = now + 90
+                            State.PB_RaidTreeTarget = nil
+                            State.PB_RaidTreeCache = nil
+                            treePart = nil
+                        end
+                    end
+                    if treePart then
+                        if dTree > 6.5 then
+                            treeHold = true
+                            Humanoid:MoveTo(treePart.Position)
+                            if (now - (State.PB_RaidJumpAt or 0)) >= 0.9 then
+                                State.PB_RaidJumpAt = now
+                                Humanoid.Jump = true
+                            end
+                            State.PB_DungeonStatusText = string.format("🌳 التوجه إلى الشجرة (%dم)...", math.floor(dTree))
+                        else
+                            State.PB_RaidTreeTarget = nil
+                            -- press whatever prompt the tree carries (executor helper, fully pcall-guarded)
+                            local prompt = treePart:FindFirstChildWhichIsA("ProximityPrompt", nil)
+                                or treePart:FindFirstChildWhichIsA("ProximityPrompt", true)
+                            if prompt and prompt.Enabled then
+                                pcall(function() fireproximityprompt(prompt) end)
+                            end
+                            State.PB_DungeonStatusText = "🌳 وصلنا الشجرة — جاري فتح الموجة..."
+                        end
+                    end
+                end
+            end
+            if treeHold then
+                -- keep the sword ready while walking (never attack from across the room)
+                if Config.PB_AutoClicker then State.PB_RaidSwing = nil end
+                State.PB_RaidWalkUntil = now + 1.0
+                return
             end
             -- Own sword work when the Auto-Clicker toggle is off (never both: one shared throttle)
             if not Config.PB_AutoClicker then
@@ -5945,8 +6082,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v8.0 | Pixel Blade [Full Auto Raid — waves, farm & swings]"
-    or "⚔️ Delta Hub v8.0 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v8.1 | Pixel Blade [Raid Tree Objectives + No Falling Bosses]"
+    or "⚔️ Delta Hub v8.1 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -6315,7 +6452,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v8.0 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v8.1 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6947,4 +7084,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v8.0] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v8.1] Loaded! Active Game Detected: " .. tostring(CurrentGame))
