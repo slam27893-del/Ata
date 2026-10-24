@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v7.9 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v8.0 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v7.9)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v8.0)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -2537,7 +2537,9 @@ end
 local function pbPerformRealM1Attack()
     if tick() < (State.PB_QuietUntil or 0) then return end -- v6.3 post-pick quiet: no server sends right after a level-up pick
 
-    if not Config.PB_AutoClicker then return end
+    -- v8.0: State.PB_RaidSwing lets the Auto Raid driver perform the very same real sword taps when the
+    -- Auto-Clicker toggle is off (remote damage is discarded on validated servers, so taps are the only killer).
+    if not (Config.PB_AutoClicker or State.PB_RaidSwing) then return end
     local now = tick()
     -- v6.5 watchdog: PB_M1ClickInFlight used to be able to stay true forever if the release thread died
     -- (that was the "auto-clicker hangs after the pick" report) -> stale flag expires after just 0.35s (v6.7:
@@ -4840,7 +4842,10 @@ task.spawn(function()
                     else
                         State.PB_ActiveFollowMob = nil
                         State.PB_ActiveFollowPart = nil
-                        State.PB_DungeonStatusText = "⏳ في انتظار ظهور وحوش الغارة..."
+                        State.PB_DungeonStatusText = string.format(
+                            "🏰 الرايد التلقائي — الموجة %d | بانتظار الوحوش...",
+                            State.PB_RaidWaveN or 0
+                        )
                     end
                 else
                     State.PB_ActiveFollowMob = nil
@@ -4897,6 +4902,67 @@ task.spawn(function()
                         pbFaceTowardPart(getPBMobTargetPart(State.PB_AttackFocus))
                     end
                     pbPerformRealM1Attack()
+                end
+            end
+        end)
+    end
+end)
+
+-- 2H. v8.0 REAL AUTO RAID DRIVER (user: «ابغى اضيف الرايد التلقائي»). Pixel Blade raids are wave arenas that
+-- are advanced ONLY by remotes.StartRaid:FireServer() — no arguments, the exact call every community raid
+-- script uses. The old toggle farmed whatever was already standing in front of the player and then went silent
+-- when a wave ended, which is why it felt like nothing was there. This driver:
+--   * fires StartRaid when the current wave is CLEAR (nothing attacked for 2s) and, as a heartbeat, every 9s
+--     while a wave is still alive, with a hard 6s floor between sends so the server can never be spammed;
+--   * gives up gracefully: 10 fruitless sends (lobby / wrong mode) -> 45s cool-down, reset the instant a mob
+--     shows up, so the hub never turns into a remote flood;
+--   * swings the REAL sword itself (same 0.12s throttle + jump-per-swing engine) when the Auto-Clicker toggle
+--     is OFF, and aims the camera at the current target first — Auto Raid is fully hands-free either way.
+task.spawn(function()
+    while State.Running do
+        task.wait(0.5)
+        pcall(function()
+            if not Config.PB_AutoFarmRaid or Config.PB_AutoFarmDungeon then
+                State.PB_RaidSwing = nil
+                return
+            end
+            if not HumanoidRootPart or not Humanoid or Humanoid.Health <= 0 then return end
+            local cutscene = workspace:FindFirstChild("inCutscene")
+            if cutscene and cutscene.Value == true then return end
+            if State.PB_UpgradePopupOpen then return end
+            local now = tick()
+            local busy = State.PB_AttackFocus and State.PB_AttackFocus.Parent
+                and (now - (State.PB_AttackFocusTick or 0)) < 1.2
+            if busy then
+                State.PB_RaidMisses = 0
+            end
+            -- Own sword work when the Auto-Clicker toggle is off (never both: one shared throttle)
+            if not Config.PB_AutoClicker then
+                State.PB_RaidSwing = true
+                if busy and (now - (State.PB_LastAimTick or 0)) >= 0.09 then
+                    State.PB_LastAimTick = now
+                    pbFaceTowardPart(getPBMobTargetPart(State.PB_AttackFocus))
+                end
+                pbPerformRealM1Attack()
+            else
+                State.PB_RaidSwing = nil
+            end
+            -- Wave advancement
+            local lastFire = State.PB_RaidStartAt or 0
+            local idleFor = now - (State.PB_LastActiveRoomTime or 0)
+            local wantWave = (not busy and idleFor >= 2.0) or (now - lastFire) >= 9.0
+            if wantWave and (now - lastFire) >= 6.0 then
+                if (State.PB_RaidMisses or 0) >= 10 and (now - lastFire) < 45.0 then
+                    return
+                end
+                local pbRemotes = getPBRemotes()
+                local startRaid = pbRemotes and pbRemotes:FindFirstChild("StartRaid")
+                if startRaid and startRaid:IsA("RemoteEvent") then
+                    State.PB_RaidStartAt = now
+                    State.PB_RaidMisses = (State.PB_RaidMisses or 0) + 1
+                    State.PB_RaidWaveN = (State.PB_RaidWaveN or 0) + 1
+                    startRaid:FireServer()
+                    State.PB_DungeonStatusText = string.format("🏰 الرايد التلقائي: بدء الموجة %d ...", State.PB_RaidWaveN)
                 end
             end
         end)
@@ -5879,8 +5945,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v7.9 | Pixel Blade [No More Falling Mobs/Bosses — Physics-Safe Hitbox]"
-    or "⚔️ Delta Hub v7.9 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v8.0 | Pixel Blade [Full Auto Raid — waves, farm & swings]"
+    or "⚔️ Delta Hub v8.0 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -6249,7 +6315,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v7.9 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v8.0 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6312,14 +6378,20 @@ if CurrentGame == "PixelBlade" then
         Config.PB_AutoClicker = val
     end)
 
-    addToggle(TabPBFarm, "فارم الغارات التلقائي (Auto Farm Raids)", Config.PB_AutoFarmRaid, function(val)
+    addToggle(TabPBFarm, "🏰 الرايد التلقائي الكامل (Auto Raid — يبدأ الموجات + يفارم + يضرب بنفسه)", Config.PB_AutoFarmRaid, function(val)
         Config.PB_AutoFarmRaid = val
         if not val then
             State.PB_ActiveFollowMob = nil
             State.PB_ActiveFollowPart = nil
             State.PB_ActiveTargetCFrame = nil
+            State.PB_RaidSwing = nil
+            State.PB_RaidStartAt = nil
         else
             applyPBTempBuffAndHeal(true)
+            State.PB_RaidWaveN = 0
+            State.PB_RaidMisses = 0
+            State.PB_RaidStartAt = nil
+            State.PB_DungeonStatusText = "🏰 الرايد التلقائي يعمل — جاري إرسال أمر بدء الموجة..."
         end
     end)
 
@@ -6875,4 +6947,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v7.9] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v8.0] Loaded! Active Game Detected: " .. tostring(CurrentGame))
