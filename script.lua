@@ -1,9 +1,9 @@
 --[[
     ============================================================================
-    ⚔️ Multi-Game Delta Hub [PROTECTED v8.3 - World 5: The Sunken Depths / CHRONOS]
+    ⚔️ Multi-Game Delta Hub [PROTECTED v8.4 - World 5: The Sunken Depths / CHRONOS]
     Supported Games:
       1. Attack on Titan: Revolution (AOT:R) - All Maps & Raids
-      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v8.3)
+      2. Pixel Blade (World 1-5 Sunken Depths / Arc 2 CHRONOS: v4.6 Room Transitions + Auto Replay + Auto Upgrade + Monster Shield + W5 Boss-2 Pillar Breaker v8.4)
     Compatible with: Delta Executor (Android / iOS / PC) & All Luau Executors
     Repository: https://github.com/slam27893-del/Ata
     ============================================================================
@@ -2866,6 +2866,230 @@ local function checkPBDungeonRoomTransition()
     return false
 end
 
+-- v8.4 W5 ROOM/CHAPTER TRANSITION (user: «في الدانجن W5 البطل يوقف في المرحلة وما ينتقل للغرفة اللي بعدها»
+-- with a CHAPTER 2/3 screenshot). The old transition knew only World-4 room names ("6".."9", "20", campfires),
+-- so in Sunken Depths a cleared chapter simply left the bot standing forever. This generic traveller finds the
+-- room's own objective door/exit and walks the player into it. Community scripts advance Pixel Blade rooms by
+-- using the model child named "ExitZone" (proven convention), so that is priority #1; doors/gates with
+-- ProximityPrompts come next, then objective-marker names (arrow/next/waypoint/chapter). Cheap by design: it only
+-- runs while the room is EMPTY, scans workspace children once per 1.2s, and caches the chosen target.
+local function pbDungeonExitCandidates()
+    local out = {}
+    if not HumanoidRootPart then return out end
+    local myPos = HumanoidRootPart.Position
+    local now = tick()
+    local bl = State.PB_ExitBlacklist
+    local strongWords = { "exit", "next", "objective", "waypoint", "portal", "arrow", "chapter", "goal" }
+    local midWords = { "door", "gate", "stair", "enter", "stairs" }
+    local weakWords = { "camp", "teleport", "checkpoint", "tunnel", "passage" }
+    local char = LocalPlayer and LocalPlayer.Character
+    local function consider(inst)
+        if not inst or not inst.Parent or inst == char then return end
+        if bl and bl[inst] and bl[inst] > now then return end
+        local p = nil
+        local score = 0
+        -- priority 1: the community-proven ExitZone child
+        local ez = inst:FindFirstChild("ExitZone", true)
+        if ez and ez:IsA("BasePart") then
+            p = ez
+            score = 100
+        end
+        local nm = string.lower(tostring(inst.Name))
+        if not p then
+            local hit = 0
+            for i = 1, #strongWords do
+                if string.find(nm, strongWords[i], 1, true) then hit = 3 break end
+            end
+            if hit == 0 then
+                for i = 1, #midWords do
+                    if string.find(nm, midWords[i], 1, true) then hit = 2 break end
+                end
+            end
+            if hit == 0 then
+                for i = 1, #weakWords do
+                    if string.find(nm, weakWords[i], 1, true) then hit = 1 break end
+                end
+            end
+            if hit == 0 then return end
+            score = hit * 10
+            if inst:IsA("BasePart") then
+                p = inst
+            elseif inst:IsA("Model") then
+                p = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+            end
+        end
+        if not p or not p.Parent then return end
+        local prompt = inst:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt then score = score + 30 end
+        local d = (p.Position - myPos).Magnitude
+        if d > 340 or d < 4 then return end
+        if math.abs(p.Position.Y - myPos.Y) > 70 then return end
+        table.insert(out, { part = p, obj = inst, prompt = prompt, dist = d, score = score })
+    end
+    for _, ch in ipairs(workspace:GetChildren()) do
+        consider(ch)
+    end
+    table.sort(out, function(a, b)
+        if a.score ~= b.score then return a.score > b.score end
+        return a.dist < b.dist
+    end)
+    return out
+end
+
+-- Forward probe: last-resort progression when a room exposes NO named exit at all (W5 chapter corridors).
+-- It only ever moves toward the camera direction over confirmed floor, and refuses when a wall is in the way.
+local function pbDungeonObjectiveTravel()
+    refreshCharacterRefs()
+    if not HumanoidRootPart or not Humanoid then return false end
+    local now = tick()
+    -- v8.4 safety: leaving a room is only legal when nothing alive is around. Walking away from an immune boss
+    -- phase would soft-lock the chapter, so the traveller refuses while any living enemy is within 220 studs.
+    do
+        local myPos0 = HumanoidRootPart.Position
+        local list0 = collectAllPBModels()
+        for i = 1, #list0 do
+            local m = list0[i]
+            if m and m.Parent and isPBMobAlive(m) then
+                local p0 = getPBMobTargetPart(m)
+                if p0 and (p0.Position - myPos0).Magnitude <= 220 then
+                    return false
+                end
+            end
+        end
+    end
+    -- Forward probe (nested closure so the main chunk stays under Lua's 200-local limit): last-resort progression
+    -- when a room exposes NO named exit — it only moves toward the camera direction over CONFIRMED floor, refuses
+    -- when a wall blocks, and sidesteps right/left once before giving up.
+    local function probeForward()
+        if (now - (State.PB_ProbeAt or 0)) < 0.9 then return false end
+        State.PB_ProbeAt = now
+        local origin = HumanoidRootPart.Position
+        local dir = Vector3.new(HumanoidRootPart.CFrame.LookVector.X, 0, HumanoidRootPart.CFrame.LookVector.Z)
+        local cam = workspace.CurrentCamera
+        if cam then
+            local cd = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
+            if cd.Magnitude > 0.1 then dir = cd.Unit end
+        end
+        if dir.Magnitude < 0.1 then return false end
+        local rpP = RaycastParams.new()
+        rpP.FilterType = Enum.RaycastFilterType.Exclude
+        rpP.FilterDescendantsInstances = { HumanoidRootPart.Parent }
+        local dest = origin + dir * 28
+        local wall = workspace:Raycast(origin + Vector3.new(0, 2, 0), dir * 28, rpP)
+        if wall and wall.Distance < 13 then
+            local alt = Vector3.new(dir.Z, 0, -dir.X)
+            local wallR = workspace:Raycast(origin + Vector3.new(0, 2, 0), alt * 28, rpP)
+            if wallR and wallR.Distance < 13 then
+                alt = Vector3.new(-dir.Z, 0, dir.X)
+                local wallL = workspace:Raycast(origin + Vector3.new(0, 2, 0), alt * 28, rpP)
+                if wallL and wallL.Distance < 13 then return false end
+            end
+            dest = origin + alt * 28
+        end
+        local floorHit = workspace:Raycast(Vector3.new(dest.X, origin.Y + 20, dest.Z), Vector3.new(0, -70, 0), rpP)
+        if not floorHit then return false end
+        Humanoid:MoveTo(Vector3.new(dest.X, floorHit.Position.Y + 3.5, dest.Z))
+        if (now - (State.PB_ProbeJumpAt or 0)) >= 1.1 then
+            State.PB_ProbeJumpAt = now
+            Humanoid.Jump = true
+        end
+        State.PB_DungeonStatusText = "🧭 ما فيه مخرج مسمّى — استكشاف الطريق للأمام..."
+        return true
+    end
+
+    local target = State.PB_ExitTarget
+    local prompt = State.PB_ExitPrompt
+    if not (target and target.Parent) then
+        -- candidate scan throttled to 1.2s and cached (never re-walk the workspace every tick)
+        local cands = State.PB_ExitCache
+        if not cands or (now - (State.PB_ExitScanAt or 0)) > 1.2 then
+            cands = pbDungeonExitCandidates()
+            State.PB_ExitCache = cands
+            State.PB_ExitScanAt = now
+        end
+        local valid = {}
+        for i = 1, #cands do
+            if cands[i].part and cands[i].part.Parent then
+                table.insert(valid, cands[i])
+            end
+        end
+        cands = valid
+        if #cands == 0 then
+            State.PB_ExitCache = nil
+            -- v8.4 no named exit at all (W5 chapter corridors) -> crawl forward over confirmed floor, but only
+            -- after the room has been quiet a while so a normal wave transition can never drag the player around
+            if (now - (State.PB_LastActiveRoomTime or 0)) < 7.0 then return false end
+            return probeForward()
+        end
+        target = cands[1].part
+        prompt = cands[1].prompt
+        State.PB_ExitTarget = target
+        State.PB_ExitPrompt = prompt
+        State.PB_ExitSince = now
+        State.PB_ExitLastPos = HumanoidRootPart.Position
+    end
+    -- stuck detection: no real movement toward it for 6s -> drop it for 90s and try the next candidate
+    if (now - (State.PB_ExitSince or now)) > 6.0 then
+        local lp = State.PB_ExitLastPos or HumanoidRootPart.Position
+        if (HumanoidRootPart.Position - lp).Magnitude < 7 then
+            State.PB_ExitBlacklist = State.PB_ExitBlacklist or {}
+            State.PB_ExitBlacklist[State.PB_ExitObj or target.Parent] = now + 90
+            State.PB_ExitTarget = nil
+            State.PB_ExitPrompt = nil
+            State.PB_ExitSince = now
+            return false
+        end
+        State.PB_ExitLastPos = HumanoidRootPart.Position
+        State.PB_ExitSince = now
+    end
+    State.PB_ExitObj = target.Parent
+    local d = (target.Position - HumanoidRootPart.Position).Magnitude
+    if d <= 11 then
+        if prompt and prompt.Enabled then
+            pcall(function() fireproximityprompt(prompt) end)
+        end
+        State.PB_DungeonStatusText = "🚪 وصلنا المخرج — جاري فتح الغرفة التالية..."
+        State.PB_ExitBlacklist = State.PB_ExitBlacklist or {}
+        State.PB_ExitBlacklist[State.PB_ExitObj or target.Parent] = now + 20
+        State.PB_ExitTarget = nil
+        State.PB_ExitPrompt = nil
+        State.PB_ExitCache = nil
+        State.PB_ExitSince = now
+        return true
+    end
+    -- floor point 6 studs in front of the exit, snapped by raycast
+    local dir = HumanoidRootPart.Position - target.Position
+    dir = Vector3.new(dir.X, 0, dir.Z)
+    if dir.Magnitude < 1 then dir = Vector3.new(0, 0, 1) end
+    dir = dir.Unit
+    local spot = target.Position + dir * 6
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    rp.FilterDescendantsInstances = { HumanoidRootPart.Parent }
+    local hit = workspace:Raycast(Vector3.new(spot.X, target.Position.Y + 25, spot.Z), Vector3.new(0, -120, 0), rp)
+    if hit then
+        spot = Vector3.new(spot.X, hit.Position.Y + 3.5, spot.Z)
+    else
+        spot = Vector3.new(spot.X, target.Position.Y + 3.5, spot.Z)
+    end
+    if d > 80 then
+        -- one safe hop across the chapter arena (walking across W5 terrain on mobile never finished)
+        pcall(function()
+            HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+            HumanoidRootPart.AssemblyAngularVelocity = Vector3.zero
+            HumanoidRootPart.CFrame = CFrame.lookAt(spot, Vector3.new(target.Position.X, spot.Y, target.Position.Z))
+        end)
+    else
+        Humanoid:MoveTo(spot)
+        if (now - (State.PB_ExitJumpAt or 0)) >= 0.8 then
+            State.PB_ExitJumpAt = now
+            Humanoid.Jump = true
+        end
+    end
+    State.PB_DungeonStatusText = string.format("🚪 التوجه للمخرج (%dم)...", math.floor(d))
+    return true
+end
+
 -- Bring Mobs & Expand Enemy Hitboxes (Works BOTH in Manual Mode AND with Dungeon/Raid Auto-Farm!):
 -- 1. Never sets eHrp.Anchored = true on the client (so server hit registration never desyncs).
 -- 2. When PB_BringMobs ("سحب الوحوش") is ON during Dungeon Auto-Farm:
@@ -2888,7 +3112,17 @@ local function pbExpandHitboxesFor(model, sz)
     end
     local origMap = State.PB_HitboxOriginal
     local skipMap = State.PB_HitboxSkipUntil
-    if (skipMap[model] or 0) > tick() then return false end
+    local nowT = tick()
+    if (skipMap[model] or 0) > nowT then return false end
+    -- v8.4 FPS FIX: v8.3 re-walked every mob's descendants on EVERY 0.45s pass (30 gathered mobs = a full model
+    -- tree walk 60x/second). A mob's hitboxes never change identity mid-fight, so each model is rescanned at most
+    -- once every 2.5s (newly spawned mobs still get expanded immediately on their first pass).
+    if not State.PB_HitboxScanAt then
+        State.PB_HitboxScanAt = setmetatable({}, { __mode = "k" })
+    end
+    local scanAt = State.PB_HitboxScanAt
+    if (scanAt[model] or 0) > nowT then return false end
+    scanAt[model] = nowT + (((State.PB_FpsAvg or 60) < 20) and 6.0 or 2.5)
     local applied = 0
     local function isPhysicsRoot(p)
         if model.PrimaryPart == p then return true end
@@ -2965,7 +3199,8 @@ local function pbBringAndExpandTargets()
     local gatherPos = gatherCF.Position
     local gRight = gatherCF.RightVector
     local gLook = gatherCF.LookVector
-    local gatherSlot = 0
+    local gatherSlot = 0   -- slot assignment counter (max 15 distinct spots)
+    local gatherMoved = 0  -- teleports actually issued in this pass (hard frame guard)
     local function slotCF(i)
         -- 15 non-overlapping spots on two rings
         if i <= 8 then
@@ -3014,13 +3249,31 @@ local function pbBringAndExpandTargets()
                             -- During Dungeon/Raid Auto-Farm: pull all OTHER active room enemies (hadEntrance == true) onto the primary target spot!
                             if gatherGrounded and v ~= activeFollowMob and not isBoss and (isRaid or hadEnt == true) then
                                 local distToGather = (eHrp.Position - gatherPos).Magnitude
-                                -- v8.3 requested range increase: 85 -> 160 studs (capped at 30 mobs per pass so
-                                -- one giant pile can never nuke the frame rate)
-                                if distToGather > 2.5 and distToGather <= 160 and gatherSlot < 30 then
-                                    gatherSlot = gatherSlot + 1
-                                    eHrp.AssemblyLinearVelocity = Vector3.zero
-                                    eHrp.AssemblyAngularVelocity = Vector3.zero
-                                    eHrp.CFrame = slotCF(((gatherSlot - 1) % 15) + 1)
+                                -- v8.4 FPS FIX (user: «الفريمات رجعت 4-6»): v8.3 re-assigned slots by scan order on
+                                -- EVERY pass, so the whole pile shuffled 2-3 times a second = dozens of CFrame
+                                -- writes + physics separations per second = 4-6 FPS. Each mob now keeps a STABLE
+                                -- slot (weak map) and is only teleported when it drifted > 7 studs from it, with a
+                                -- hard cap of 12 teleports per pass. Range stays 160 as requested.
+                                if distToGather > 2.5 and distToGather <= 160 then
+                                    local slotMap = State.PB_GatherSlotMap
+                                    if not slotMap then
+                                        slotMap = setmetatable({}, { __mode = "k" })
+                                        State.PB_GatherSlotMap = slotMap
+                                    end
+                                    local idx = slotMap[v]
+                                    if not idx then
+                                        gatherSlot = gatherSlot + 1
+                                        if gatherSlot > 15 then gatherSlot = 15 end
+                                        idx = gatherSlot
+                                        slotMap[v] = idx
+                                    end
+                                    local targetCF = slotCF(idx)
+                                    if (eHrp.Position - targetCF.Position).Magnitude > 7 and gatherMoved < (((State.PB_FpsAvg or 60) < 20) and 5 or 12) then
+                                        gatherMoved = gatherMoved + 1
+                                        eHrp.AssemblyLinearVelocity = Vector3.zero
+                                        eHrp.AssemblyAngularVelocity = Vector3.zero
+                                        eHrp.CFrame = targetCF
+                                    end
                                 elseif distToGather <= 12 then
                                     -- already gathered: clamp any physics explosion before it launches them away
                                     local av = eHrp.AssemblyLinearVelocity
@@ -3034,11 +3287,26 @@ local function pbBringAndExpandTargets()
                             -- v8.3 Manual mode: pull range 65 -> 120 studs, same ring placement (never stacked)
                             if gatherGrounded and not isBoss and (isRaid or hadEnt == true or (eHrp.Position - HumanoidRootPart.Position).Magnitude <= 95) then
                                 local dMe = (eHrp.Position - gatherPos).Magnitude
-                                if dMe <= 120 and dMe > 2.5 and gatherSlot < 30 then
-                                    gatherSlot = gatherSlot + 1
-                                    eHrp.AssemblyLinearVelocity = Vector3.zero
-                                    eHrp.AssemblyAngularVelocity = Vector3.zero
-                                    eHrp.CFrame = slotCF(((gatherSlot - 1) % 15) + 1)
+                                if dMe <= 120 and dMe > 2.5 then
+                                    local slotMap = State.PB_GatherSlotMap
+                                    if not slotMap then
+                                        slotMap = setmetatable({}, { __mode = "k" })
+                                        State.PB_GatherSlotMap = slotMap
+                                    end
+                                    local idx = slotMap[v]
+                                    if not idx then
+                                        gatherSlot = gatherSlot + 1
+                                        if gatherSlot > 15 then gatherSlot = 15 end
+                                        idx = gatherSlot
+                                        slotMap[v] = idx
+                                    end
+                                    local targetCF = slotCF(idx)
+                                    if (eHrp.Position - targetCF.Position).Magnitude > 7 and gatherMoved < (((State.PB_FpsAvg or 60) < 20) and 5 or 12) then
+                                        gatherMoved = gatherMoved + 1
+                                        eHrp.AssemblyLinearVelocity = Vector3.zero
+                                        eHrp.AssemblyAngularVelocity = Vector3.zero
+                                        eHrp.CFrame = targetCF
+                                    end
                                 elseif dMe <= 12 then
                                     local av = eHrp.AssemblyLinearVelocity
                                     if av.Magnitude > 90 then
@@ -4569,6 +4837,21 @@ task.spawn(function()
     end
 end)
 
+-- v8.4 ADAPTIVE PERFORMANCE GUARD (user: «الفريمات رجعت 4-6 فريم»). A 1-second rolling FPS meter lets the hub
+-- protect itself: on a struggling device the gather/expand cadence stretches instead of piling more physics and
+-- instance walking on top of an already overloaded client. Zero UI, fully automatic.
+do
+    local frames, accum = 0, 0
+    RunService.Heartbeat:Connect(function(dt)
+        frames = frames + 1
+        accum = accum + dt
+        if accum >= 1.0 then
+            State.PB_FpsAvg = frames / accum
+            frames, accum = 0, 0
+        end
+    end)
+end
+
 -- 2D. Dedicated Pixel Blade God Buff, Rapid Auto Heal, 360° Monster Protection & Throttled Inf Dash Loop (Zero Lag!)
 -- IMPORTANT: Keeps character CanCollide intact so the player stands on the floor, never sinks, and jumps naturally with Humanoid.Jump!
 task.spawn(function()
@@ -4595,7 +4878,8 @@ end)
 -- 2E. Dedicated Pixel Blade Hitbox Expander & Bring Mobs Loop
 task.spawn(function()
     while State.Running do
-        task.wait(0.45)
+        -- v8.4: 0.45s normally, 1.0s when the device is under 20 FPS (never add fuel to a dying frame rate)
+        task.wait(((State.PB_FpsAvg or 60) < 20) and 1.0 or 0.45)
         if Config.PB_ExpandHitbox or Config.PB_AutoFarmDungeon or Config.PB_AutoFarmRaid or Config.PB_BringMobs or State.PB_HitboxRestorePending then
             pcall(pbBringAndExpandTargets)
         end
@@ -4632,7 +4916,7 @@ end)
 --   * travelling is a single safe hop (raycasted floor, 8 studs off the trunk, never inside it) when the tree is
 --     far away, plus normal walking + jumps when it is close — so it always reaches it on mobile;
 --   * the tree we just reached is blacklisted for 40s, which is what makes "move to the NEXT tree" work.
-local function pbRaidTreeCandidate(inst)
+local function pbRaidTreeCandidate(inst, allowNeon)
     if not inst or not (inst:IsA("BasePart") or inst:IsA("Model")) then return nil end
     local nm = string.lower(tostring(inst.Name))
     if string.find(nm, "treant", 1, true) then return nil end
@@ -4658,11 +4942,15 @@ local function pbRaidTreeCandidate(inst)
             score = score + 8
         end
     else
+        if not allowNeon then return nil end
         -- NEON PINK/PURPLE GIANT fallback (the raid tree on screen): needs bulk + several glowing parts.
+        -- v8.4 FPS: capped at 80 parts so a big map model can never stall a frame.
         local ok, glow, big = pcall(function()
-            local neons, tallest = 0, 0
+            local neons, tallest, seen = 0, 0, 0
             for _, d in ipairs(inst:GetDescendants()) do
                 if d:IsA("BasePart") then
+                    seen = seen + 1
+                    if seen > 80 then break end
                     local c = d.Color
                     local isPink = (c.R > 0.55 and c.B > 0.55 and c.G < 0.65) or (c.R > 0.75 and c.B > 0.75)
                     if isPink and (d.Material == Enum.Material.Neon or d.Transparency < 0.4) then
@@ -4685,7 +4973,7 @@ end
 local function pbFindRaidTree()
     local now = tick()
     local cache = State.PB_RaidTreeCache
-    if cache and (now - cache.t) < 2.0 then
+    if cache and (now - cache.t) < 3.0 then
         if cache.part and cache.part.Parent then return cache.part end
         return nil
     end
@@ -4693,28 +4981,40 @@ local function pbFindRaidTree()
     local char = LocalPlayer and LocalPlayer.Character
     local bl = State.PB_RaidTreeBlacklist
     local best, bestScore, bestD = nil, 0, math.huge
-    local lookedAt = 0
-    local function consider(inst)
+    local function consider(inst, allowNeon)
         if not inst or inst == char then return end
         if bl and bl[inst] and bl[inst] > now then return end
-        local p, score = pbRaidTreeCandidate(inst)
-        if not p then return end
-        local d = (p.Position - myPos).Magnitude
-        if d > 900 or p.Position.Y < (myPos.Y - 150) then return end
-        -- named trees win outright; the neon fallback is only used when nothing is named
-        if best and bestScore >= 20 and score < 20 then return end
-        if score > bestScore or (score == bestScore and d < bestD) then
-            best, bestScore, bestD = p, score, d
+        pcall(function()
+            local p0 = inst:IsA("BasePart") and inst
+                or (inst:IsA("Model") and (inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)))
+            if not p0 then return end
+            -- cheap distance reject BEFORE any deep inspection (this scan used to walk the whole map)
+            local d0 = (p0.Position - myPos).Magnitude
+            if d0 > 900 or p0.Position.Y < (myPos.Y - 150) then return end
+            local p, score = pbRaidTreeCandidate(inst, allowNeon)
+            if not p then return end
+            if not allowNeon and score < 20 then return end
+            if score > bestScore or (score == bestScore and d0 < bestD) then
+                best, bestScore, bestD = p, score, d0
+            end
+        end)
+    end
+    for _, ch in ipairs(workspace:GetChildren()) do
+        consider(ch, false)
+        if (ch:IsA("Model") or ch:IsA("Folder")) and not best then
+            local n = 0
+            for _, sub in ipairs(ch:GetChildren()) do
+                n = n + 1
+                if n > 60 then break end
+                consider(sub, false)
+            end
         end
     end
-    State.PB_RaidTreeScanCount = 0
-    for _, ch in ipairs(workspace:GetChildren()) do
-        consider(ch)
-        if ch:IsA("Model") or ch:IsA("Folder") then
-            for _, sub in ipairs(ch:GetChildren()) do
-                lookedAt = lookedAt + 1
-                if lookedAt <= 400 then consider(sub) end
-            end
+    -- neon colour fallback: only when NOTHING is named, at most once every 6s, top level only
+    if not best and (now - (State.PB_RaidNeonScanAt or 0)) > 6.0 then
+        State.PB_RaidNeonScanAt = now
+        for _, ch in ipairs(workspace:GetChildren()) do
+            consider(ch, true)
         end
     end
     State.PB_RaidTreeCache = { t = now, part = best }
@@ -4798,6 +5098,9 @@ task.spawn(function()
                         -- v7.1: the ONE model combat is currently fighting (the stale watch judges ONLY this)
                         State.PB_AttackFocus = mob
                         State.PB_AttackFocusTick = tick()
+                        -- v8.4: a live target cancels any exit trip (never walk away mid-fight)
+                        State.PB_ExitTarget = nil
+                        State.PB_ExitPrompt = nil
                         -- v8.1 BOSS-FALL RECOVERY: if the model we are fighting is far BELOW us (already out of
                         -- the world), lift it back to our own floor level once (harmless local nudge when the
                         -- server owns it, a real rescue when the client does) and stop chasing it for 20s.
@@ -5020,14 +5323,22 @@ task.spawn(function()
                             State.PB_DungeonStatusText = "⏳ انتظار فتح باب الغرفة التالية وظهور الوحوش..."
                         else
                             State.PB_DungeonStatusText = "🏃 الانتقال التلقائي للغرفة التالية..."
-                            checkPBDungeonRoomTransition()
+                            -- v8.4: World-4 room teleports first; if this world has none (W5 chapters), walk the
+                            -- player to the room's own exit/door/objective so the run can never stall here.
+                            if not checkPBDungeonRoomTransition() then
+                                -- v8.4: World-4 room teleports first; otherwise the traveller finds this world's
+                                -- own exit/door/objective (and falls back to a safe forward crawl when the room
+                                -- exposes nothing at all). Both refuse while any living enemy is within 220 studs.
+                                pbDungeonObjectiveTravel()
+                            end
                         end
                     else
                         State.PB_ActiveFollowMob = nil
                         State.PB_ActiveFollowPart = nil
                         State.PB_DungeonStatusText = string.format(
-                            "🏰 الرايد التلقائي — الموجة %d | بانتظار الوحوش...",
-                            State.PB_RaidWaveN or 0
+                            "🏰 الرايد التلقائي — الموجة %d | بانتظار الوحوش...%s",
+                            State.PB_RaidWaveN or 0,
+                            ((State.PB_FpsAvg or 60) < 20) and string.format(" ⚡تخفيف الحمل (%d FPS)", math.floor(State.PB_FpsAvg)) or ""
                         )
                     end
                 else
@@ -6206,8 +6517,8 @@ TitleLabel.Size = UDim2.new(1, -140, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = CurrentGame == "PixelBlade"
-    and "🗡️ Delta Hub v8.3 | Pixel Blade [Raid Tree Works + Safe Bring-Mobs Ring]"
-    or "⚔️ Delta Hub v8.3 | Attack on Titan: Revolution"
+    and "🗡️ Delta Hub v8.4 | Pixel Blade [W5 Room Travel + Adaptive FPS Guard]"
+    or "⚔️ Delta Hub v8.4 | Attack on Titan: Revolution"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 200, 90)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 14
@@ -6576,7 +6887,7 @@ end
 -- ============================================================================
 if CurrentGame == "PixelBlade" then
     -- [PIXEL BLADE TAB 1: FARM & COMBAT]
-    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v8.3 [World 5: The Sunken Depths / CHRONOS]")
+    addSectionHeader(TabPBFarm, "🗡️ Pixel Blade v8.4 [World 5: The Sunken Depths / CHRONOS]")
 
     local DungeonStatusBox = Instance.new("TextLabel")
     DungeonStatusBox.Size = UDim2.new(1, 0, 0, 34)
@@ -6612,6 +6923,11 @@ if CurrentGame == "PixelBlade" then
         State.PB_LastActiveRoomTime = nil
         State.PB_UsedExitZones = {}
         State.PB_CompletedProps = {}
+        State.PB_ExitTarget = nil
+        State.PB_ExitPrompt = nil
+        State.PB_ExitBlacklist = {}
+        State.PB_GatherSlotMap = nil
+        State.PB_HitboxScanAt = nil
         if not val then
             State.PB_ActiveFollowMob = nil
             State.PB_ActiveFollowPart = nil
@@ -7208,4 +7524,4 @@ if CurrentGame == "PixelBlade" then
     end)
 end
 
-print("[🛡️ Delta Hub v8.3] Loaded! Active Game Detected: " .. tostring(CurrentGame))
+print("[🛡️ Delta Hub v8.4] Loaded! Active Game Detected: " .. tostring(CurrentGame))
